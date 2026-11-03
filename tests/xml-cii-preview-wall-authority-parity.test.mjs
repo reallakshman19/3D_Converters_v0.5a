@@ -170,3 +170,68 @@ test('optional GLRD JSON preserves complete wall-authority row parity', {
   const result = evaluate(names, stage);
   assert.equal(result.branchRows.length, 30);
 });
+
+
+function xmlField(body, name) {
+  const match = new RegExp('<' + name + '(?:\\s[^>]*)?>([\\s\\S]*?)<\\/' + name + '>', 'i').exec(body);
+  return match ? match[1].replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim() : '';
+}
+
+function referenceDomAndRows(xml) {
+  const fields = [
+    'NodeNumber', 'ComponentType', 'ComponentRefNo', 'Endpoint', 'OutsideDiameter',
+    'OuterDiameter', 'OD', 'BoreMm', 'Bore', 'DTXR', 'DTXR_POS', 'DTXR_PS', 'TEEDESC_POS',
+    'Position', 'Weight', 'WallThickness', 'CorrosionAllowance',
+  ];
+  const branches = [];
+  const branchRows = [];
+  const nodeRows = [];
+  const blocks = [...xml.matchAll(/<Branch(?:\s[^>]*)?>([\s\S]*?)<\/Branch>/g)];
+  for (const match of blocks) {
+    const name = xmlField(match[1], 'Branchname');
+    const children = [el('Branchname', name)];
+    const nodes = [...match[1].matchAll(/<Node(?:\s[^>]*)?>([\s\S]*?)<\/Node>/g)];
+    for (const node of nodes) {
+      const values = Object.fromEntries(fields.map((field) => [field, xmlField(node[1], field)]));
+      children.push(el('Node', '', fields.map((field) => el(field, values[field]))));
+      nodeRows.push({
+        branchName: name, nodeNumber: values.NodeNumber, componentRefNo: values.ComponentRefNo,
+        endpoint: values.Endpoint, boreMm: null, weightKg: values.Weight,
+        wallThicknessInput: values.WallThickness, componentType: values.ComponentType,
+      });
+    }
+    branches.push(el('Branch', '', children));
+    branchRows.push({
+      branchName: name, sizeMm: null, pipingClass: '93833', rating: '',
+      wallThickness: '', wallThicknessSource: 'none',
+    });
+  }
+  return { document: documentFor(branches), branchRows, nodeRows };
+}
+
+test('optional actual GLRD XML + staged JSON preserve 30-branch/1224-node wall results', {
+  skip: !process.env.GLRD_SOURCE_XML || !process.env.GLRD_STAGE_FILE,
+}, () => {
+  const xml = readFileSync(process.env.GLRD_SOURCE_XML, 'utf8');
+  const stagedJsonText = readFileSync(process.env.GLRD_STAGE_FILE, 'utf8');
+  const { document, branchRows, nodeRows } = referenceDomAndRows(xml);
+  assert.equal(branchRows.length, 30);
+  assert.equal(nodeRows.length, 1224);
+  globalThis.DOMParser = class { parseFromString() { return document; } };
+  const args = {
+    xmlText: xml, stagedJsonText,
+    config: { pipingClass: { masterRows: [] }, overrides: {} },
+    result: { branchRows, nodeRows },
+  };
+  const legacyResult = before.applyPreviewBoreWallAuthority(args);
+  const indexedResult = afterFix.applyPreviewBoreWallAuthority(args);
+  assert.deepStrictEqual(indexedResult, legacyResult);
+  assert.equal(indexedResult.branchRows.length, 30);
+  assert.equal(indexedResult.nodeRows.length, 1224);
+  assert.equal(indexedResult.branchRows.reduce(
+    (total, row) => total + row.dtxrWallEvidenceCount, 0,
+  ), 1279);
+  assert.ok(indexedResult.nodeRows.some((node) => String(node.nodeNumber) === '10'));
+  assert.ok(indexedResult.nodeRows.some((node) => String(node.nodeNumber) === '460'));
+});
