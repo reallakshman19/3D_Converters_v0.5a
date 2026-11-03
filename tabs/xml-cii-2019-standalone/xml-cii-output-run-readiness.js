@@ -120,6 +120,7 @@ export function buildOutputArtifactRows(input = {}, manifest = {}) {
   return [
     artifact('enriched', 'Enriched XML/InputXML', result.enrichedName || 'enriched-output.xml', result.enrichedText, 'application/xml;charset=utf-8'),
     artifact('cii', 'CII', result.ciiName || 'output.cii', result.ciiText, 'text/plain;charset=utf-8'),
+    artifact('rigid-ledger', 'Actual Python RIGID auxiliary ledger JSON', result.rigidLedgerName || 'rigid_ledger.json', result.rigidLedgerText, 'application/json;charset=utf-8'),
     artifact('diagnostics', 'Diagnostics JSON', 'xml-cii-diagnostics.json', result.diagnostics ? JSON.stringify(result.diagnostics, null, 2) : '', 'application/json;charset=utf-8'),
     artifact('manifest', 'Run Manifest JSON', 'xml-cii-run-manifest.json', hasResult(input) ? JSON.stringify(manifest, null, 2) : '', 'application/json;charset=utf-8'),
   ];
@@ -151,7 +152,7 @@ export function buildRunManifest(input = {}) {
       committed: result.topoFixCommitted === true,
       ciiInputSource: result.ciiInputSource || 'original',
     },
-    artifacts: { enriched: !!result.enrichedText, cii: !!result.ciiText, topologyFindings: !!result.topologyFindingsText, topologyPlan: !!result.topologyFixPlanText, topoFixXml: !!result.topoFixXmlText, diagnostics: !!result.diagnostics, manifest: hasResult(input) },
+    artifacts: { enriched: !!result.enrichedText, cii: !!result.ciiText, rigidLedger: !!result.rigidLedgerText, topologyFindings: !!result.topologyFindingsText, topologyPlan: !!result.topologyFixPlanText, topoFixXml: !!result.topoFixXmlText, diagnostics: !!result.diagnostics, manifest: hasResult(input) },
   };
 }
 
