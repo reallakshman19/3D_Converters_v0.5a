@@ -232,8 +232,14 @@ export async function run(context) {
     }
   }
 
-  const splitWeightPropagation = applyXmlCiiSplitRigidWeightPropagation(enriched.xmlText, { config: enriched.config });
+  const splitWeightPropagation = applyXmlCiiSplitRigidWeightPropagation(enriched.xmlText, {
+    sourceId: runValues.sourceId || primary.name || '',
+    snapshotDigest: runValues.verifiedWeightSnapshotDigest || '',
+    ownershipAllocations: enriched.config?.rigidOwnership?.allocations || {},
+    requireAllocation: enriched.config?.rigidOwnership?.requireAllocation === true,
+  });
   enriched.stats = { ...(enriched.stats || {}), ...(splitWeightPropagation.stats || {}) };
+  enriched.splitRigidOwnershipLedger = splitWeightPropagation.componentLedger || [];
   // Structural observations matter even when no XML weights were rewritten.
   enriched.diagnostics.push(...(splitWeightPropagation.diagnostics || []));
   if (splitWeightPropagation.ownershipIssues?.length) {
@@ -283,10 +289,13 @@ export async function run(context) {
   const ciiOutputs = Array.isArray(ciiResponse.outputs) ? ciiResponse.outputs : [];
   const stats = enriched.stats;
   const diagnostics = enriched.diagnostics;
-  const diagnosticPayload = { generatedAt: new Date().toISOString(), source: 'latest-run', inputName: primary.name, enrichedName, enrichedStageName, topologyName, diagnosticsName: `${stem}_enrichment_diagnostics.json`, stats, diagnostics, matchedFacts: enriched.matchedFacts || [], rejectedFacts: enriched.rejectedFacts || [], topologyAudit };
+  const diagnosticPayload = { splitRigidOwnershipLedger: enriched.splitRigidOwnershipLedger || [], generatedAt: new Date().toISOString(), source: 'latest-run', inputName: primary.name, enrichedName, enrichedStageName, topologyName, diagnosticsName: `${stem}_enrichment_diagnostics.json`, stats, diagnostics, matchedFacts: enriched.matchedFacts || [], rejectedFacts: enriched.rejectedFacts || [], topologyAudit };
   const enrichedStageText = JSON.stringify(buildEnrichedStageJson(enriched.xmlText, diagnosticPayload), null, 2);
   const topologyText = JSON.stringify(topologyAudit, null, 2);
-  const rigidWeightAuditText = JSON.stringify(finalRigidWeightAudit, null, 2);
+  const rigidWeightAuditText = JSON.stringify({
+    ...finalRigidWeightAudit,
+    splitRigidOwnershipLedger: enriched.splitRigidOwnershipLedger || [],
+  }, null, 2);
   const diagnosticText = JSON.stringify(diagnosticPayload, null, 2);
   publishMatchedPreviewDiagnostics(diagnosticPayload);
   const diagnosticRows = (Array.isArray(diagnostics) ? diagnostics : []).map((item) => ({ type: item?.type || '', nodeNumber: item?.nodeNumber || item?.keptNode || item?.removedNode || '', branchName: item?.branchName || '', pipingClass: item?.pipingClass || item?.resolvedPipingClass || '', rating: item?.rating || '', boreMm: item?.boreMm == null ? '' : Number(item.boreMm).toFixed ? Number(item.boreMm).toFixed(3) : item.boreMm, lengthMm: item?.lengthMm == null ? '' : Number(item.lengthMm).toFixed ? Number(item.lengthMm).toFixed(3) : item.lengthMm, weight: item?.weight ?? '', method: item?.method || item?.reason || item?.source || item?.status || '', kind: item?.kind || '', message: item?.message || item?.stagedName || item?.url || item?.reason || '' }));
