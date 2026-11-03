@@ -196,9 +196,21 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   if (applied.appliedCount !== gate.issues.length) {
     return { ok: false, error: `Final rigid weight changes affected ${applied.appliedCount} node(s); expected ${gate.issues.length}. Ambiguous target or missing node: CII export blocked.`, ...gate };
   }
+  // Manual mass approval changes the exact Python input. Recompute custody
+  // rather than reusing a pre-approval digest for a different XML snapshot.
+  const finalSnapshotDigest = await digestRigidOwnershipSnapshot({
+    sourceId: job?.sourceId || job?.sourceName || '',
+    sourceName: job?.sourceName || '',
+    sourceText: job?.sourceText || '',
+    stagedJsonText: job?.stagedJsonText || '',
+    supportConfigJson: job?.supportConfigJson || '{}',
+    branchSelection: job?.branchSelection || null,
+    options: job?.options || {},
+    preparedXmlText: applied.xmlText,
+  });
   const afterReviewCustody = applyXmlCiiSplitRigidWeightPropagation(applied.xmlText, {
     sourceId: job?.sourceId || job?.sourceName || '',
-    snapshotDigest,
+    snapshotDigest: finalSnapshotDigest,
     ownershipAllocations: config?.rigidOwnership?.allocations || {},
     requireAllocation: config?.rigidOwnership?.requireAllocation === true,
   });
@@ -218,5 +230,5 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   if (typeof runtime.onFinalRigidWeightsApplied === 'function') {
     await runtime.onFinalRigidWeightsApplied({ weightsByKey: permitted, reviewedRows });
   }
-  return { ok: true, xmlText: applied.xmlText, audit: gate.audit, splitCustody: afterReviewCustody, snapshotDigest, reviewedRows, issues: gate.issues };
+  return { ok: true, xmlText: applied.xmlText, audit: gate.audit, splitCustody: afterReviewCustody, snapshotDigest: finalSnapshotDigest, reviewedRows, issues: gate.issues };
 }
