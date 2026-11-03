@@ -1,10 +1,21 @@
 /**
- * Read-only post-enrichment audit of the positive RIGID weights emitted by
+ * Read-only post-enrichment RIGID projection audit. The allRows edge census
+ * includes zero, missing and invalid weights; rows retains the positive-only
+ * empirical API contract. Actual post-Python edge identity is authoritative
+ * only in xml_to_cii2019_rigid_ledger.py, not this pre-Python projection.
  * xml_to_cii2019.py. Never changes an assigned component mass.
  * Element lengths and component spans are diagnostic measurements only;
  * empirical A1/A2 ±50% deviation is the sole numeric review gate.
  */
 function text(value) { return value == null ? '' : String(value).trim(); }
+function weightState(value) {
+  if (value == null || String(value).trim() === '') return 'MISSING';
+  const number = Number(String(value).replace(/,/g, ''));
+  if (!Number.isFinite(number)) return 'INVALID';
+  if (number < 0) return 'NEGATIVE';
+  if (number === 0) return 'ZERO';
+  return 'POSITIVE';
+}
 function positive(value) {
   if (value === '' || value == null) return null;
   const number = Number(value);
@@ -73,8 +84,8 @@ function auditBranch(branch, propagationRows) {
   for (let index = 1; index < nodes.length; index += 1) {
     const from = nodes[index - 1], to = nodes[index];
     if (!(Number(to.rigid) === 2 || (Number(from.rigid) === 2 && text(to.componentType).toUpperCase() === 'FLAN'))) continue;
-    const massKg = positive(to.weight);
-    if (massKg === null) continue;
+    const ownerWeightState = weightState(to.weight);
+    const massKg = ownerWeightState === 'ZERO' ? 0 : positive(to.weight);
     const componentRefNo = reference(to.componentRefNo);
     const elementLengthMm = distance(from.position, to.position);
     const wholeComponentSpanMm = componentSpan(nodes, componentRefNo);
@@ -83,7 +94,8 @@ function auditBranch(branch, propagationRows) {
       branchName: text(branch.branchName), fromNode: text(from.nodeNumber), toNode: text(to.nodeNumber),
       endpoint: text(to.endpoint), componentType: text(to.componentType), nodeName: text(to.nodeName),
       componentRefNo, boreMm: positive(to.boreMm), rating: text(to.rating),
-      massKg, elementLengthMm, wholeComponentSpanMm, lengthRatio,
+      massKg, ownerWeightState, ownerWeightRaw: text(to.weight),
+      elementLengthMm, wholeComponentSpanMm, lengthRatio,
       weightOrigin: 'existing-enriched-weight', reviewFlags: [],
     };
     if (propagatedSource(row, propagationRows)) {
@@ -91,11 +103,14 @@ function auditBranch(branch, propagationRows) {
       row.reviewFlags.push('POST_REVIEW_WEIGHT_PROPAGATION');
     }
     if (!componentRefNo) row.reviewFlags.push('WEIGHT_COMPONENT_REFERENCE_UNKNOWN');
+    if (ownerWeightState === 'MISSING') row.reviewFlags.push('RIGID_OWNER_WEIGHT_MISSING');
+    if (ownerWeightState === 'INVALID') row.reviewFlags.push('RIGID_OWNER_WEIGHT_INVALID');
+    if (ownerWeightState === 'NEGATIVE') row.reviewFlags.push('RIGID_OWNER_WEIGHT_NEGATIVE');
     results.push(row);
   }
   const grouped = new Map();
   for (const row of results) {
-    if (!row.componentRefNo) continue;
+    if (!row.componentRefNo || row.ownerWeightState !== 'POSITIVE') continue;
     const list = grouped.get(row.componentRefNo) || [];
     list.push(row);
     grouped.set(row.componentRefNo, list);
@@ -109,14 +124,24 @@ function auditBranch(branch, propagationRows) {
 export function auditXmlCiiRigidWeightsFromBranches(branches, options = {}) {
   const propagated = Array.isArray(options.propagationRows) ? options.propagationRows : [];
   const weightScale = options.kgToNewton === false ? 1 : 10;
-  const rows = (Array.isArray(branches) ? branches : []).flatMap((branch) => auditBranch(branch, propagated))
-    .map((row) => ({ ...row, exportedWeight: row.massKg * weightScale, exportedUnit: weightScale === 10 ? 'N' : 'kg', status: row.reviewFlags.length ? 'REVIEW_REQUIRED' : 'AUDITED' }));
+  const allRows = (Array.isArray(branches) ? branches : []).flatMap((branch) => auditBranch(branch, propagated))
+    .map((row) => ({ ...row, exportedWeight: row.massKg === null ? null : row.massKg * weightScale,
+      exportedUnit: weightScale === 10 ? 'N' : 'kg', status: row.reviewFlags.length ? 'REVIEW_REQUIRED' : 'AUDITED' }));
+  // Preserve A1/A2's positive-only observed-mass validation input contract.
+  const rows = allRows.filter((row) => row.ownerWeightState === 'POSITIVE');
   const flagged = rows.filter((row) => row.reviewFlags.length);
   return {
     schema: 'xml-cii-post-enrichment-rigid-weight-audit/v1',
-    authority: 'READ_ONLY_FINAL_EXPORT_RECONCILIATION',
-    summary: { positiveRigidEdges: rows.length, flaggedEdges: flagged.length, postReviewPropagatedEdges: rows.filter((row) => row.weightOrigin === 'post-review-split-propagation').length, repeatedMassEdges: rows.filter((row) => row.reviewFlags.includes('REPEATED_COMPONENT_MASS_ON_MULTIPLE_RIGID_ELEMENTS')).length },
-    rows, flagged,
+    authority: 'READ_ONLY_PRE_PYTHON_EXPORT_PROJECTION',
+    summary: { allRigidEdges: allRows.length, positiveRigidEdges: rows.length,
+      zeroRigidEdges: allRows.filter((row) => row.ownerWeightState === 'ZERO').length,
+      missingRigidEdges: allRows.filter((row) => row.ownerWeightState === 'MISSING').length,
+      invalidRigidEdges: allRows.filter((row) => ['INVALID', 'NEGATIVE'].includes(row.ownerWeightState)).length,
+      flaggedEdges: flagged.length,
+      structurallyInvalidEdges: allRows.filter((row) => ['MISSING', 'INVALID', 'NEGATIVE'].includes(row.ownerWeightState)).length,
+      postReviewPropagatedEdges: rows.filter((row) => row.weightOrigin === 'post-review-split-propagation').length,
+      repeatedMassEdges: rows.filter((row) => row.reviewFlags.includes('REPEATED_COMPONENT_MASS_ON_MULTIPLE_RIGID_ELEMENTS')).length },
+    rows, flagged, allRows,
   };
 }
 export function auditXmlCiiRigidWeightsForExport(xmlText, options = {}) {
