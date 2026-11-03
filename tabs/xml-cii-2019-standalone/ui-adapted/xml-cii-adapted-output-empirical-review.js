@@ -9,6 +9,7 @@ import { enrichStandaloneXmlForRun } from '../xml-cii-standalone-run-parity.js';
 import { applyEffectiveFactsToJob } from '../xml-cii-workflow-service.js';
 import { buildStandaloneFinalRigidReview } from '../xml-cii-final-rigid-weight-review-gate.js';
 import { applyXmlCiiRigidWeightOverrides } from '../../../converters/xml-cii2019-core/weight-match-model.js';
+import { digestRigidOwnershipSnapshot } from '../../../converters/xml-cii2019-core/rigid-weight-snapshot.js';
 import { modeAExecutionRows } from './xml-cii-adapted-mode-a-propagation.js';
 import { applyModeAConsolidatedRigidReviewUpdates } from './xml-cii-adapted-rigid-review-mode-a-state.js';
 import { normalizeModeABatchState, syncActiveModeASource } from '../xml-cii-mode-a-batch.js';
@@ -59,12 +60,23 @@ export async function inspectOutputEmpiricalSource(sourceState, options = {}) {
   const applied = Object.keys(overrides).length
     ? applyXmlCiiRigidWeightOverrides(parity.xmlText, overrides)
     : { xmlText: parity.xmlText, appliedCount: 0 };
+  const snapshotDigest = await digestRigidOwnershipSnapshot({
+    sourceId: job.sourceId || job.sourceName || '',
+    sourceName: job.sourceName || '',
+    sourceText: job.sourceText || '',
+    stagedJsonText: job.stagedJsonText || '',
+    supportConfigJson: job.supportConfigJson || '{}',
+    branchSelection: job.branchSelection || null,
+    options: job.options || {},
+    preparedXmlText: applied.xmlText,
+  });
+  reviewOptions.snapshotDigest = snapshotDigest;
   const inspectedParity = { ...parity, xmlText: applied.xmlText };
   const mandatory = buildStandaloneFinalRigidReview(inspectedParity, config, reviewOptions);
   const all = buildStandaloneFinalRigidReview(inspectedParity, config, {
     ...reviewOptions, includeAllPositiveMasses: true,
   });
-  return { job, parity: inspectedParity, mandatory, all };
+  return { job, parity: inspectedParity, mandatory, all, snapshotDigest };
 }
 
 function saveReviewedWeights(stateRef, sourceId, weightsByKey) {
