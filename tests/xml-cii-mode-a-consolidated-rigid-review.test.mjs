@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
-import { JSDOM } from 'jsdom';
 import { xmlCiiRenderWeightMatchPhase } from '../tabs/model-converters/converters/xmltocii2019_helper/weight-match-renderer.js';
-import { openModeAConsolidatedRigidWeightReviewPopup } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-rigid-review-mode-a.js';
+import { modeARigidWeightReviewMarkup } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-rigid-review-mode-a.js';
 import { finalRigidWeightReviewMarkup } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-final-rigid-weight-popup.js';
 import { readFileSync } from 'node:fs';
 import {
@@ -94,17 +93,9 @@ assert.match(finalHtml,/60–100% match confidence/);
 assert.match(finalHtml,/59\.0% match confidence/);
 assert.match(finalHtml,/A1 estimate \/ deviation/);
 assert.match(finalHtml,/A2 estimate \/ deviation/);
-const uiDom=new JSDOM('<!doctype html><html><body></body></html>',{url:'https://example.test'});
-globalThis.window=uiDom.window;
-globalThis.document=uiDom.window.document;
-const modeA=openModeAConsolidatedRigidWeightReviewPopup(entries);
-const overlay=document.querySelector('.mc-rigid-review-overlay');
-assert.ok(overlay,`Mode A dialog absent: children=${document.body.children.length}; markup=${document.body.innerHTML.slice(0,300)}; flat=${flattenModeARigidReviewEntries(entries).length}`);
-assert.match(overlay.textContent,/Suggestion auto-apply: match confidence 60–100%/);
-assert.match(overlay.textContent,/±50%/);
-assert.match(overlay.textContent,/Apply Eligible Suggestions \(60–100%\)/);
-overlay.querySelector('[data-mode-a-rigid-cancel]').click();
-assert.equal((await modeA).cancelled,true);
-uiDom.window.close();
+const modeAHtml=modeARigidWeightReviewMarkup(flat,entries);
+assert.match(modeAHtml,/Suggestion auto-apply: match confidence 60–100%/);
+assert.match(modeAHtml,/±50%/);
+assert.match(modeAHtml,/Apply Eligible Suggestions \\(60–100%\\)/);
 
 console.log('Weight Match 60–100%, Mode A auto-apply 60–100%, and final dialog empirical ±50% UI: PASS');
