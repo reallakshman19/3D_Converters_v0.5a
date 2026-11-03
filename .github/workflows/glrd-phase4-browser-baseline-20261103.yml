@@ -84,11 +84,67 @@ jobs:
       - name: Independently verify baseline XML is nonempty and parsable
         run: |
           python3 -c "import pathlib,xml.etree.ElementTree as ET; p=pathlib.Path('/tmp/glrd/output/baseline-enriched.xml');assert p.stat().st_size>1000;ET.parse(p);print('Valid baseline XML bytes',p.stat().st_size)"
+      - name: Verify baseline is byte-identical to first successful capture
+        run: |
+          test "$(sha256sum /tmp/glrd/output/baseline-enriched.xml | cut -d ' ' -f1)" = "f00da45caf73b15e930e4c91d068d8d1bebd1b9ad1452ad0d7b204af9c3a8aa2"
+          test "$(sha256sum /tmp/glrd/output/baseline-preview.json | cut -d ' ' -f1)" = "76bedf169f0a6e00e42539e634735d4736f86f205ca0c7be9da145e4c9f0adec"
+      - name: Checkout immutable PR2 wall-index candidate
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/candidate
+          git -C /tmp/glrd/candidate checkout --detach 814157b162b981c9876f564f3cb0474435c8c37e
+          test "$(git -C /tmp/glrd/candidate rev-parse HEAD)" = "814157b162b981c9876f564f3cb0474435c8c37e"
+          test -z "$(git -C /tmp/glrd/candidate status --porcelain --untracked-files=no)"
+      - name: Capture optimized Phase 1 Preview and genuine downstream enriched XML
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$CHROME_BIN"
+          node tests/glrd_phase4_browser_export_capture.mjs \
+            --root /tmp/glrd/candidate \
+            --xml /tmp/glrd/input/source.xml \
+            --staged /tmp/glrd/input/staged.json \
+            --config /tmp/glrd/input/config.json \
+            --linelist /tmp/glrd/input/linelist.xlsx \
+            --piping-class /tmp/glrd/input/piping-class.json \
+            --weight /tmp/glrd/input/weight.json \
+            --material-map /tmp/glrd/input/material-map.txt \
+            --out /tmp/glrd/output \
+            --label optimized \
+            --expected-sha 814157b162b981c9876f564f3cb0474435c8c37e \
+            --chromium "$CHROME_BIN"
+      - name: Compare true browser enriched XML bytes and structured Preview bytes
+        run: |
+          python3 /tmp/glrd/candidate/tests/glrd_phase4_enriched_parity.py \
+            --before /tmp/glrd/output/baseline-enriched.xml \
+            --after /tmp/glrd/output/optimized-enriched.xml \
+            --before-manifest /tmp/glrd/output/baseline-manifest.json \
+            --after-manifest /tmp/glrd/output/optimized-manifest.json \
+            --report /tmp/glrd/output/enriched-xml-diff.json
+          cmp /tmp/glrd/output/baseline-preview.json /tmp/glrd/output/optimized-preview.json
+          printf 'Structured Preview byte diff: ZERO\n' | tee /tmp/glrd/output/preview-diff.txt
+          sha256sum /tmp/glrd/output/*enriched.xml | tee /tmp/glrd/output/export-sha256.txt
+      - name: Run native GLRD and wall-authority Node regression tests
+        run: |
+          python3 - <<'PY'
+          import json
+          rows=json.load(open('/tmp/glrd/output/baseline-preview.json',encoding='utf8'))['branchRows']
+          json.dump([row['branchName'] for row in rows],open('/tmp/glrd/input/branch-names.json','w',encoding='utf8'))
+          assert len(rows)==30 and all(row['lineKeyMethod']=='exact' for row in rows)
+          PY
+          cd /tmp/glrd/candidate
+          GLRD_SOURCE_XML=/tmp/glrd/input/source.xml \
+          GLRD_STAGE_FILE=/tmp/glrd/input/staged.json \
+          GLRD_BRANCH_NAMES_FILE=/tmp/glrd/input/branch-names.json \
+          node --test \
+            tests/xml-cii-preview-wall-authority-parity.test.mjs \
+            tests/xml-cii-preview-wall-evidence-index.test.mjs \
+            tests/xml-cii-bore-wall-authority.test.mjs \
+            tests/xml-cii-preview-strict-line-authority.test.mjs
+          python3 tests/test_glrd_phase4_enriched_parity.py -v
       - name: Upload baseline and failure evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: glrd-browser-baseline-main-a3b3d7e
+          name: glrd-browser-baseline-vs-pr2-verification
           path: /tmp/glrd/output/
           if-no-files-found: warn
           retention-days: 14
