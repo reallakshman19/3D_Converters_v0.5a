@@ -143,8 +143,8 @@ jobs:
       - name: Checkout pinned separate Phase 2 per-build reuse candidate
         run: |
           git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/phase2-candidate
-          git -C /tmp/glrd/phase2-candidate checkout --detach d8b9da2bcbb2e676309b0d48e731697d65ec4010
-          test "$(git -C /tmp/glrd/phase2-candidate rev-parse HEAD)" = "d8b9da2bcbb2e676309b0d48e731697d65ec4010"
+          git -C /tmp/glrd/phase2-candidate checkout --detach 24917f2855d23473293797edf510872990a9d18c
+          test "$(git -C /tmp/glrd/phase2-candidate rev-parse HEAD)" = "24917f2855d23473293797edf510872990a9d18c"
           test -z "$(git -C /tmp/glrd/phase2-candidate status --porcelain --untracked-files=no)"
       - name: Capture Phase 2 Chromium Preview and downstream enriched XML
         run: |
@@ -161,7 +161,7 @@ jobs:
             --material-map /tmp/glrd/input/material-map.txt \
             --out /tmp/glrd/phase2-output \
             --label optimized \
-            --expected-sha d8b9da2bcbb2e676309b0d48e731697d65ec4010 \
+            --expected-sha 24917f2855d23473293797edf510872990a9d18c \
             --chromium "$CHROME_BIN"
       - name: Enforce Phase 2 byte-identical Preview and enriched XML against PR2
         run: |
