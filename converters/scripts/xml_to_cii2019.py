@@ -1621,6 +1621,21 @@ def _build_coords_payload(model: ConversionModel, coords_mode: str) -> list[str]
     else:
         selected = sorted(anchor_by_component.values())
 
+    # A restraint-selected anchor must not erase a branch's original start
+    # coordinate (for example Node 10 after a valve/flange rigid split).
+    # Preserve the actual XML position, not an assumed (0, 0, 0) origin.
+    branch_heads = []
+    previous_edge = None
+    for edge in model.edges:
+        if (previous_edge is None or edge.branch_name != previous_edge.branch_name
+                or edge.from_node is not previous_edge.to_node):
+            branch_heads.append((edge.from_node.node_number, edge.from_node.position))
+        previous_edge = edge
+    coordinate_by_node = {node_number: position for node_number, position in selected}
+    for node_number, position in branch_heads:
+        coordinate_by_node.setdefault(node_number, position)
+    selected = sorted(coordinate_by_node.items())
+
     if not selected:
         return [_row(["0"])]
 

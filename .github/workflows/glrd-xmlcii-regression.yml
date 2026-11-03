@@ -1,0 +1,53 @@
+name: GLRD source XML baseline and replay
+on:
+  push:
+    branches:
+      - fix/rigid-review-kg-coords-20261103
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reference-replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download external GLRD references
+        run: |
+          mkdir -p /tmp/glrd-reference
+          root="https://raw.githubusercontent.com/reallakshman19/3D_Converters/main/Benchmarks/XML-CII-2019/revamped"
+          curl --retry 3 --fail --location --silent --show-error "$root/GLRD-1000-PSI-02.xml" -o /tmp/glrd-reference/GLRD-1000-PSI-02.xml
+          curl --retry 3 --fail --location --silent --show-error "$root/STD-00-PX-4338-01001-0001-02.xlsx" -o /tmp/glrd-reference/linelist.xlsx
+          curl --retry 3 --fail --location --silent --show-error "$root/STF_2026Nov03-0839_managed_stage.json" -o /tmp/glrd-reference/stage.json
+          curl --retry 3 --fail --location --silent --show-error "https://raw.githubusercontent.com/reallakshman19/3D_Converters/25db94769994751bb0fb6e6d83a578efd9ac8162/docs/docs/Masters/wtValveweights.json" -o /tmp/glrd-reference/wtValveweights.json
+          sha256sum /tmp/glrd-reference/*
+          wc -c /tmp/glrd-reference/*
+      - name: Preserve source evidence
+        run: |
+          mkdir -p /tmp/glrd-replay/reference
+          cp /tmp/glrd-reference/linelist.xlsx /tmp/glrd-replay/reference/STD-00-PX-4338-01001-0001-02.xlsx
+          cp /tmp/glrd-reference/stage.json /tmp/glrd-replay/reference/STF_2026Nov03-0839_managed_stage.json
+      - name: Create untouched-main baseline first
+        run: |
+          git worktree add --detach /tmp/glrd-main origin/main
+          cp tests/glrd_xmlcii_external_reference.py /tmp/glrd-main/tests/glrd_xmlcii_external_reference.py
+          python3 /tmp/glrd-main/tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-reference/GLRD-1000-PSI-02.xml --staged /tmp/glrd-reference/stage.json --linelist /tmp/glrd-reference/linelist.xlsx --out /tmp/glrd-replay --label main-before
+      - name: Recreate enriched XML with fixed PR branch
+        run: |
+          python3 tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-reference/GLRD-1000-PSI-02.xml --staged /tmp/glrd-reference/stage.json --linelist /tmp/glrd-reference/linelist.xlsx --out /tmp/glrd-replay --label pr-after
+      - name: Compare outputs and enforce no unrelated changes
+        run: |
+          python3 tests/glrd_xmlcii_external_compare.py --before /tmp/glrd-replay/main-before --after /tmp/glrd-replay/pr-after --out /tmp/glrd-replay/diff
+      - name: Run targeted regression tests
+        run: |
+          python3 tests/xml-cii-runtime-custody.test.py
+          node tests/xml-cii-mode-a-consolidated-rigid-review.test.mjs
+          GLRD_WEIGHT_MASTER_PATH=/tmp/glrd-reference/wtValveweights.json node tests/xml-cii-node460-flange-weight.test.mjs
+      - name: Upload reference replay evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glrd-reference-replay
+          path: /tmp/glrd-replay/
+          if-no-files-found: warn

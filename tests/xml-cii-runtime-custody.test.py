@@ -95,6 +95,46 @@ assert float(runtime._runtime_bend_payload(model)[0].split()[0]) == 0.0
 runtime._PUBLISH_BEND_RADIUS_1_5D = True
 assert float(runtime._runtime_bend_payload(model)[0].split()[0]) == 150.0
 
+# A post-split first-component anchor must coexist with open-end/other
+# island anchors. Preserve the actual node 10 source coordinate (including a
+# legitimate zero origin), while the XML->CII axis map remains X,Z,-Y.
+def coordinate_payload(first_position, mode="first"):
+    first = node(10, first_position)
+    end = node(760, (109600.0, 106916.102, 101229.297))
+    other = node(3700, (112850.0, 108548.5, 101409.703))
+    other_end = node(3710, (112950.0, 108648.5, 101409.703))
+    model = SimpleNamespace(
+        edges=[
+            SimpleNamespace(from_node=first, to_node=end, branch_name="/A/B1"),
+            SimpleNamespace(from_node=other, to_node=other_end, branch_name="/B/B1"),
+        ],
+        restraints=[SimpleNamespace(node_number=760, position=end.position,
+                                    specs=(SimpleNamespace(is_open_end=True),))],
+    )
+    return base._build_coords_payload(model, mode)
+
+
+def coordinate_rows(payload):
+    count = int(payload[0].strip())
+    rows = {int(parts[0]): tuple(float(value) for value in parts[1:4])
+            for parts in (line.split() for line in payload[1:])}
+    assert count == len(rows)
+    return rows
+
+
+for start, expected in [
+    ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+    ((111369.76, 108416.90, 101088.18), (111369.76, 101088.18, -108416.90)),
+]:
+    for mode in ("first", "all"):
+        coords = coordinate_rows(coordinate_payload(start, mode))
+        assert list(coords) == [10, 760, 3700], (mode, coords)
+        assert coords[10] == expected
+        assert coords[760] == (109600.0, 101229.297, -106916.102)
+        assert coords[3700] == (112850.0, 101409.703, -108548.5)
+
+assert coordinate_payload((0, 0, 0), "none") == [base._row(["0"])]
+
 invocation = (ROOT / "converters" / "xml-cii-2019-standalone" / "invocation-builder.js").read_text(encoding="utf-8")
 engine = (ROOT / "converters" / "xml-cii-2019-standalone" / "engine.js").read_text(encoding="utf-8")
 assert "xml_to_cii2019_runtime_custody.py" in invocation
