@@ -115,6 +115,13 @@ const EXPRESSION=String.raw`(async()=>{
   const rejectListener=e=>result.appErrors.push('unhandledrejection: '+String(e.reason?.message||e.reason));
   window.addEventListener('error',errListener);
   window.addEventListener('unhandledrejection',rejectListener);
+  // The app initially loads Model Converters asynchronously. Wait for that
+  // renderer to settle before navigating; otherwise an in-flight default
+  // render can replace the tab during this test, obscuring the G3 route.
+  const initialDefault=await waitFor(()=>document.querySelector('.app-content .model-converters-root')||document.querySelector('.app-content .tab-error'),60000);
+  result.initialDefaultLoaded=!!initialDefault;
+  result.initialDefaultError=initialDefault?.classList?.contains('tab-error')?initialDefault.innerText?.slice(0,450):'';
+  await pause(550);
   const nav=await waitFor(()=>document.querySelector('.app-nav button.app-tab[data-tab="xml-cii-2019-standalone"]'),20000);
   result.initialBodyText=(document.body?.innerText||'').slice(0,950);
   result.appShellPresent=!!document.querySelector('.app-shell');
@@ -135,6 +142,8 @@ const EXPRESSION=String.raw`(async()=>{
   }
   result.activeTab=document.querySelector('.app-content')?.dataset.activeTab;
   result.liveShell=true;
+  await pause(700);
+  result.initialTabStillActive=document.querySelector('.app-content')?.dataset.activeTab==='xml-cii-2019-standalone' && !!document.querySelector('.app-content .xml-cii-standalone-root');
   result.phaseButtons=[...shell.querySelectorAll('[data-phase]')].map(el=>({id:el.dataset.phase,label:el.textContent.trim().slice(0,100)}));
   result.sourceControls=[...shell.querySelectorAll('input[type=file]')].map(el=>({field:el.dataset.field,master:el.dataset.masterFile,mode:el.dataset.modeAFile,accept:el.accept}));
   result.sourcePhaseText=shell.querySelector('.xml-cii-main-workspace')?.innerText?.slice(0,1700)||'';
