@@ -49,6 +49,7 @@ function sourceRows(xmlText) {
     nodes: [...(branch.childNodes || [])].filter((node) => node.nodeType === 1 && localName(node) === 'Node').map((node) => ({
       nodeNumber: childText(node, 'NodeNumber'),
       componentType: childText(node, 'ComponentType'),
+      nodeName: childText(node, 'NodeName'),
       componentRefNo: childText(node, 'ComponentRefNo'),
       endpoint: childText(node, 'Endpoint'),
       rigid: childText(node, 'Rigid'),
@@ -80,7 +81,7 @@ function auditBranch(branch, propagationRows) {
     const lengthRatio = wholeComponentSpanMm && elementLengthMm !== null ? elementLengthMm / wholeComponentSpanMm : null;
     const row = {
       branchName: text(branch.branchName), fromNode: text(from.nodeNumber), toNode: text(to.nodeNumber),
-      endpoint: text(to.endpoint), componentType: text(to.componentType),
+      endpoint: text(to.endpoint), componentType: text(to.componentType), nodeName: text(to.nodeName),
       componentRefNo, boreMm: positive(to.boreMm), rating: text(to.rating),
       massKg, elementLengthMm, wholeComponentSpanMm, lengthRatio,
       weightOrigin: 'existing-enriched-weight', reviewFlags: [],
