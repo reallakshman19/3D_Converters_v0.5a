@@ -3,6 +3,7 @@ import { JSDOM } from 'jsdom';
 import { runXmlCii2019Workflow } from '../tabs/xml-cii-2019-standalone/xml-cii-workflow-api-atta-default.js';
 import { mappedNodeWeights } from '../tabs/xml-cii-2019-standalone/xml-cii-standalone-run-parity.js';
 import { openStandaloneFinalRigidWeightReviewPopup } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-final-rigid-weight-popup.js';
+import { collectModeARigidWeightReviewIssues } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-rigid-review-mode-a.js';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://example.test/3d-converters' });
 globalThis.window = dom.window;
@@ -129,5 +130,14 @@ assert.equal(shortDirect.weights.size,0,'short heavy must require review even wh
 assert.equal(shortDirect.reviewProposals.length,1);
 const lowDirect=mappedNodeWeights([{...directNode,weightCandidates:[{...directNode.weightCandidates[0],score:0.59}]}],{});
 assert.equal(lowDirect.weights.size,0,'below 60% cannot silently auto-fill');
+
+const consolidatedRows = await collectModeARigidWeightReviewIssues(
+  { sourceText: enriched(), stagedJsonText: '', options: { kgToNewton: true } },
+  { weight: { masterRows: [] } },
+);
+const consolidated939 = consolidatedRows.find((row) => row.fromNode === '939' && row.toNode === '10020');
+assert.ok(consolidated939, 'positive 19.1mm 15kg element must be included in Mode A consolidated early review');
+assert.equal(consolidated939.weight, 15);
+assert.ok(consolidated939.reviewFlags.includes('SHORT_HEAVY_RIGID_ELEMENT_REQUIRES_REVIEW'));
 
 console.log('PASS real standalone service + DOM dialog + engine custody: 939 -> 10020, 19.1 mm, 15kg -> 150N; blocked/approved/corrected/proposed.');
