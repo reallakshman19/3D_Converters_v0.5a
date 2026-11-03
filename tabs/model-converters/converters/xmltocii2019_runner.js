@@ -6,6 +6,7 @@ import { applyXmlCiiFlangeWeightFallbackToIssues } from '../../../converters/xml
 import { applyXmlCiiStagedGeometryAuthority } from '../../../converters/xml-cii2019-core/staged-geometry-authority.js?v=20260625-length-auto-weight-1';
 import { applyXmlCiiOutsideDiameterResolver } from '../../../converters/xml-cii2019-core/outside-diameter-resolver.js?v=20260708-od-resolver-1';
 import { applyXmlCiiSplitRigidWeightPropagation } from '../../../converters/xml-cii2019-core/split-rigid-weight-propagation.js?v=20260708-split-weight-1';
+import { digestRigidOwnershipSnapshot } from '../../../converters/xml-cii2019-core/rigid-weight-snapshot.js';
 import { buildXmlCiiTopologyDisconnectAudit } from '../../../converters/xml-cii2019-core/topology/xml-cii-topology-disconnect-audit.js?v=20260708-topology-1';
 import { buildXmlCiiNodeResolverIndex } from '../../../converters/xml-cii2019-core/sideload-resolver.js';
 import { resolveManualRestraintRows } from '../../../converters/xml-cii2019-core/sideload-restraints.js';
@@ -232,9 +233,19 @@ export async function run(context) {
     }
   }
 
+  const rigidOwnershipSnapshotDigest = await digestRigidOwnershipSnapshot({
+    sourceId: runValues.sourceId || primary.name || '',
+    sourceName: primary.name || '',
+    sourceText: originalXmlText,
+    stagedJsonText,
+    supportConfigJson: JSON.stringify(enriched.config || {}),
+    branchSelection: runValues.branchSelection || null,
+    options: runValues,
+    preparedXmlText: enriched.xmlText,
+  });
   const splitWeightPropagation = applyXmlCiiSplitRigidWeightPropagation(enriched.xmlText, {
     sourceId: runValues.sourceId || primary.name || '',
-    snapshotDigest: runValues.verifiedWeightSnapshotDigest || '',
+    snapshotDigest: rigidOwnershipSnapshotDigest,
     ownershipAllocations: enriched.config?.rigidOwnership?.allocations || {},
     requireAllocation: enriched.config?.rigidOwnership?.requireAllocation === true,
   });
@@ -289,7 +300,7 @@ export async function run(context) {
   const ciiOutputs = Array.isArray(ciiResponse.outputs) ? ciiResponse.outputs : [];
   const stats = enriched.stats;
   const diagnostics = enriched.diagnostics;
-  const diagnosticPayload = { splitRigidOwnershipLedger: enriched.splitRigidOwnershipLedger || [], generatedAt: new Date().toISOString(), source: 'latest-run', inputName: primary.name, enrichedName, enrichedStageName, topologyName, diagnosticsName: `${stem}_enrichment_diagnostics.json`, stats, diagnostics, matchedFacts: enriched.matchedFacts || [], rejectedFacts: enriched.rejectedFacts || [], topologyAudit };
+  const diagnosticPayload = { rigidOwnershipSnapshotDigest, splitRigidOwnershipLedger: enriched.splitRigidOwnershipLedger || [], generatedAt: new Date().toISOString(), source: 'latest-run', inputName: primary.name, enrichedName, enrichedStageName, topologyName, diagnosticsName: `${stem}_enrichment_diagnostics.json`, stats, diagnostics, matchedFacts: enriched.matchedFacts || [], rejectedFacts: enriched.rejectedFacts || [], topologyAudit };
   const enrichedStageText = JSON.stringify(buildEnrichedStageJson(enriched.xmlText, diagnosticPayload), null, 2);
   const topologyText = JSON.stringify(topologyAudit, null, 2);
   const rigidWeightAuditText = JSON.stringify({
