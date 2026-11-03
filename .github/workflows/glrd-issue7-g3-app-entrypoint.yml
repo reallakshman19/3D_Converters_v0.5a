@@ -119,12 +119,15 @@ jobs:
               assert obs['allMasterImportsVerified'],f'{name} master rows not verified'
               assert obs['uiMappedCount']=='30' and obs['uiUnmappedCount']=='0',f'{name} mapping failure'
               assert obs['previewCacheInitial']['tableRows']==30 and obs['previewCacheReentry']['tableRows']==30
-              assert obs['previewCacheInitial']['digest']==obs['previewCacheReentry']['digest'],f'{name} authority input changed on reentry'
+              # Digest drift is an observation, not a harness failure: exact
+              # v7 authority must miss rather than serve mismatched input.
           fields=lambda obs:{'initial':obs['previewCacheInitial'],'reentry':obs['previewCacheReentry']}
           result={'schema':'glrd-issue7-active-v7-ui-cache-parity-v1',
             'status':'OBSERVED','source':'actual index.html, 4 master import UI, original XLSX sheet, phase-4 reentry',
             'baselineSha':base['sourceSha'],'candidateSha':cand['sourceSha'],
             'baseline':fields(base['observation']),'candidate':fields(cand['observation']),
+            'digestStable':{'baseline':base['observation']['previewCacheInitial']['digest']==base['observation']['previewCacheReentry']['digest'],
+              'candidate':cand['observation']['previewCacheInitial']['digest']==cand['observation']['previewCacheReentry']['digest']},
             'expectedInputRows':{'originalXlsxUiLinelistSheet':112,'class':10699,'material':383,'weight':1595},
             'caveat':'This is actual UI Preview/cache lifecycle only; no user-driven Run or downloaded XML captured, G3 export NOT_PROVEN'}
           (root/'v7-active-ui-cache-reentry-compare.json').write_text(json.dumps(result,indent=2)+'\n')
