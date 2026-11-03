@@ -245,11 +245,38 @@ const EXPRESSION=String.raw`(async()=>{
       return null;
     },35000);
     trace.ready=ready||'timeout';
+    // The user-supplied XLSX opens on its 16-row summary sheet by default.
+    // Select the actual "Linelist" sheet using the production sheet selector.
+    if(key==='lineList'&&(ready==='loaded'||ready==='mapped')) {
+      const sheetSelector=await waitFor(()=>document.querySelector('.app-content [data-master-sheet-select="lineList"]'),5000);
+      trace.sheetOptions=sheetSelector?[...sheetSelector.options].map(o=>o.value):[];
+      if(sheetSelector){
+        const wanted=trace.sheetOptions.find(name=>name.toLowerCase()==='linelist');
+        if(wanted&&sheetSelector.value!==wanted){
+          sheetSelector.value=wanted;
+          sheetSelector.dispatchEvent(new Event('change',{bubbles:true}));
+          result.uiSteps.push('selected original XLSX Linelist worksheet using actual active-sheet selector');
+          await waitFor(()=>{
+            try{return JSON.parse(localStorage.getItem('xml-cii-master-lineList')||'null')?.length===expected;}
+            catch{return false;}
+          },12000);
+        }
+        trace.selectedSheet=wanted||sheetSelector.value;
+      }
+    }
     trace.alerts=result.appAlerts.slice(alertBefore);
     trace.afterPage=(document.querySelector('.app-content .xml-cii-main-workspace')?.innerText||'').slice(0,850);
     trace.storageRowCount=(()=>{try{return JSON.parse(localStorage.getItem('xml-cii-master-'+key)||'null')?.length??null;}catch{return null;}})();
-    trace.pass=(trace.ready==='loaded'||trace.ready==='mapped')&&trace.storageRowCount===expected;
-    if(!trace.pass)trace.error='Master import not verified in persisted row state: expected '+expected+', got '+trace.storageRowCount;
+    const card=document.querySelector('.app-content .xml-cii-master-card[data-master="'+key+'"]');
+    trace.cardMetrics=(card?.querySelector('.xml-cii-master-metrics')?.innerText||'').slice(0,600);
+    const hit=[...(card?.querySelectorAll('.xml-cii-master-metric')||[])].find(el=>el.querySelector('span')?.textContent?.trim()==='Rows');
+    trace.domRowCount=hit?Number(hit.querySelector('strong')?.textContent.replaceAll(',','')):null;
+    trace.pass=(trace.ready==='loaded'||trace.ready==='mapped')
+      &&trace.domRowCount===expected
+      &&(trace.storageRowCount===expected||trace.storageRowCount===null)
+      &&(!trace.alerts.length);
+    if(!trace.pass)trace.error='Master import row-count mismatch: expected '+expected
+      +', UI '+trace.domRowCount+', storage '+trace.storageRowCount+', worksheet '+(trace.selectedSheet||'');
     return trace;
   }
   const originalXlsx=()=>fetch('/__glrd/linelist.xlsx').then(async response=>{
@@ -326,10 +353,12 @@ async function main(){
     result.inputs={xml:hash(files.xml),staged:hash(files.staged),config:hash(files.config)};
     result.observation=await browserCapture(files);
     if(!result.observation?.liveShell)throw Error(result.observation?.blocker||'Real workbench not reached');
-    result.status='APP_ENTRYPOINT_OBSERVED';
+    if(!result.observation?.allMasterImportsVerified || !result.observation?.phasePreviewReached || result.observation.previewHostCount<1)
+      throw Error('G3 master import/Preview gate NOT_PROVEN; see observation.masters and previewHostCount');
+    result.status='UI_MASTER_IMPORT_AND_PREVIEW_OBSERVED';
   }catch(error){result.error=String(error?.message||error);}
   await writeFile(join(OUT,'g3-real-workbench-discovery.json'),JSON.stringify(result,null,2)+'\n');
   console.log(JSON.stringify(result,null,2));
-  if(result.status!=='APP_ENTRYPOINT_OBSERVED')process.exitCode=2;
+  if(result.status!=='UI_MASTER_IMPORT_AND_PREVIEW_OBSERVED')process.exitCode=2;
 }
 main().catch(error=>{console.error(error);process.exitCode=2;});
