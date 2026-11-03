@@ -42,15 +42,17 @@ test('D-01a: in-place weight master update under same identity returns stale cac
   const config = weightConfig();
   const cache = createPreviewPerBuildCache();
   const before = cache.rankWeight(context, config, opts);
+  const beforeSnapshot = structuredClone(before);
   config.weight.masterRows[0].weight = 77; // same nested rows array, different source engineering value
   const cached = cache.rankWeight(context, config, opts);
   const direct = rankXmlCiiWeightCandidates(context, config, opts);
-  assert.notDeepStrictEqual(before, direct, 'Control mutation must materially change the oracle');
-  assert.deepStrictEqual(cached, before, 'Current cache replays stale snapshot');
+  assert.notDeepStrictEqual(beforeSnapshot, direct, 'Control mutation must materially change the oracle');
+  assert.deepStrictEqual(cached, beforeSnapshot, 'Current cache replays stale pre-mutation snapshot');
   assert.notDeepStrictEqual(cached, direct, 'Current cache must be shown inconsistent with direct ranker');
   report('D-01a', 'STALE_MASTER_ROW', {
     masterWeightAfterMutation: config.weight.masterRows[0].weight,
     cachedEqualPreMutation: true, cachedEqualFresh: false,
+    initialResultRetainsSourceRowReferences: before.candidates.some(c=>c.rowData?.weight === 77),
     rankHits: cache.stats.rankHits,
   });
 });
