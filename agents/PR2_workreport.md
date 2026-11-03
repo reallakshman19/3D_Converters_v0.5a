@@ -30,6 +30,7 @@ Preserve exact staged DFS traversal, evidence order and duplicates, canonical ow
 
 ## Validation matrix
 - PASS (independent local evidence check): exact GLRD reference evidence 1,279 records deep equality and matching digest.
+- PASS (independent local defensive probe): malformed/empty JSON, object input, branch /B# canonicalization, duplicate evidence and staged OWNER override all match original behavior; `node --check` of standalone probe succeeded.
 - PASS (independent local hotspot benchmark): two runs ~4.8x–5.2x faster in staged evidence collection only.
 - PASS (static source inspection): only intended preview lookup calls altered; no writers touched.
 - NOT_RUN: newly added Node suite inside full repository (no remote test-execution tool/CI check available).
