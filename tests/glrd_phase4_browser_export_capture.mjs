@@ -140,7 +140,9 @@ async function browserCapture(files){
   finally{
     chrome.kill('SIGKILL');
     await new Promise(ok=>server.close(ok));
-    await rm(profile,{force:true,recursive:true});
+    await sleep(400);
+    try { await rm(profile,{force:true,recursive:true,maxRetries:8,retryDelay:250}); }
+    catch(cleanupError) { console.warn('Nonfatal Chrome profile cleanup error: '+String(cleanupError?.message||cleanupError)); }
   }
 }
 async function main(){
