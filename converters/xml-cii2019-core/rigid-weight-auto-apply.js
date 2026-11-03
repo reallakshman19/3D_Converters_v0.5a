@@ -7,6 +7,7 @@ import {
 
 function text(value) { return value == null ? '' : String(value).trim(); }
 function weightOf(candidate = {}) {
+  if (!candidate || typeof candidate !== 'object') return null;
   const value = Number(candidate.selectedWeight ?? candidate.suggestedWeight ?? candidate.weight);
   return Number.isFinite(value) && value > 0 ? value : null;
 }
@@ -14,6 +15,7 @@ export const XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT = 60;
 export const XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT = 100;
 
 export function xmlCiiWeightSuggestionConfidence(candidate = {}) {
+  if (!candidate || typeof candidate !== 'object') return null;
   const raw = Number(candidate.totalScore ?? candidate.score);
   if (!Number.isFinite(raw)) return null;
   const score = raw > 1 ? raw / 100 : raw;
