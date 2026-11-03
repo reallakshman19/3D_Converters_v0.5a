@@ -19,6 +19,9 @@ function reviewRow(issue, index, inNewton) {
   const suggestion = Number.isFinite(proposed) && proposed > 0 ? proposed : null;
   const flags = Array.isArray(issue.reviewFlags) ? issue.reviewFlags : [];
   const evidence = issue.empiricalEvidence || {};
+  const confidence = issue.suggestionConfidencePct;
+  const confidenceLabel = confidence === null || confidence === undefined || !Number.isFinite(Number(confidence))
+    ? 'match confidence unavailable' : `${Number(confidence).toFixed(1)}% match confidence`;
   const ref = issue.componentRefNo || 'Unresolved component reference';
   const displayElement = `${issue.fromNode || '?'} → ${issue.toNode || '?'}`;
   const exportValue = current === null ? 'unresolved' : `${numberText(current * (inNewton ? 10 : 1), 2)} ${inNewton ? 'N' : 'kg'}`;
@@ -29,7 +32,7 @@ function reviewRow(issue, index, inNewton) {
     <td style="padding:8px;white-space:nowrap;">${numberText(issue.elementLengthMm)} mm${Number(issue.wholeComponentSpanMm) > 0 ? ` / component ${numberText(issue.wholeComponentSpanMm)} mm` : ''}</td>
     <td style="padding:8px;white-space:nowrap;">${current === null ? '0 / missing' : `${numberText(current, 3)} kg`}</td>
     <td style="padding:8px;white-space:nowrap;">${esc(exportValue)}</td>
-    <td style="padding:8px;">${suggestion === null ? 'No qualified suggestion' : `${numberText(suggestion, 3)} kg (manual decision)`}</td>
+    <td style="padding:8px;">${suggestion === null ? 'No qualified suggestion' : `${numberText(suggestion, 3)} kg · ${confidenceLabel} (review required)`}</td>
     <td style="padding:8px;min-width:150px;">${evidenceCell(evidence.approach1)}</td>
     <td style="padding:8px;min-width:150px;">${evidenceCell(evidence.approach2)}</td>
     <td style="padding:8px;min-width:190px;color:#fbbf24;">${esc(flags.join('; '))}</td>
@@ -54,19 +57,20 @@ export function finalRigidWeightReviewMarkup(issues, options = {}) {
     <header style="display:flex;justify-content:space-between;gap:12px;align-items:center;padding-bottom:12px;border-bottom:1px solid #334155;">
       <div>
         <h2 style="font-size:18px;font-weight:700;color:#fbbf24;margin:0 0 6px;">Empirical Weight Deviation Review — Final CII Export</h2>
-        <div>${issues.length} rigid weight(s) exceeding empirical ±50% or missing calculable A1/A2 evidence in ${esc(options.sourceName || 'current source')}.</div>
+        <div>${issues.length} rigid weight(s) needing approval in ${esc(options.sourceName || 'current source')}: empirical deviation &gt; ±50%, unavailable A1/A2 evidence, or auto-suggestion confidence outside 60–100%.</div>
       </div>
       <button type="button" data-final-rigid-cancel style="padding:8px;background:#334155;color:#fff;border:0;border-radius:5px;">Cancel CII Export</button>
     </header>
     <p style="padding:8px 0;color:#fde68a;">Source values are in <strong>kg</strong>. CII output will use <strong>${inNewton ? 'N (kg × 10)' : 'kg (no conversion)'}</strong>.
     The empirical API checks A1 (size-band) and A2 (leave-target-cell-out matrix). Deviation = (observed kg − estimated kg) / estimated kg × 100.
-    Either available approach exceeding ±50% triggers review. If both approaches are unavailable, evidence cannot establish compliance and review is required.
+    <strong>Empirical review threshold: ±50% (strictly greater than 50% deviation).</strong> Either available approach exceeding it triggers review. If neither approach is available, review is required.
+    <strong>Separate suggestion auto-apply range: 60–100% match confidence</strong> and within empirical ±50%; other suggestions cannot be assigned without manual approval.
     Enter or correct each mass, then check its explicit approval box. Cancel blocks conversion; no silent skip.</p>
     <div style="overflow:auto;max-height:55vh;">
       <table style="border-collapse:collapse;width:100%;font-size:12px;">
         <thead><tr style="position:sticky;top:0;background:#1e293b;">
           <th>Actual CII element</th><th>Branch</th><th>ComponentRefNo</th><th>Element / physical span</th>
-          <th>Current mass</th><th>CII mass/force</th><th>Unapproved proposal</th><th>A1 estimate / deviation</th><th>A2 estimate / deviation</th><th>Empirical reason</th><th>Approved kg</th><th>Reviewed</th>
+          <th>Current mass</th><th>CII mass/force</th><th>Unapproved proposal</th><th>A1 estimate / deviation</th><th>A2 estimate / deviation</th><th>Reason for review</th><th>Approved kg</th><th>Reviewed</th>
         </tr></thead><tbody>${issues.map((row, index) => reviewRow(row, index, inNewton)).join('')}</tbody>
       </table>
     </div>
