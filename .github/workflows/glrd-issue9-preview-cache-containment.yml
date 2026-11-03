@@ -144,11 +144,25 @@ jobs:
           (d/'verified-byte-diff.json').write_text(json.dumps(report,indent=2)+'\n')
           print(json.dumps(report,indent=2))
           PY
+      - name: Build exact branch-name corpus so optional GLRD tests cannot skip
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('/tmp/glrd/outputs/baseline-preview.json').read_text())
+          rows=data['branchRows']
+          names=[row['branchName'] for row in rows]
+          assert len(names)==30 and len(set(names))==30
+          assert all(row['lineKeyMethod']=='exact' for row in rows)
+          Path('/tmp/glrd/inputs/branch-names.json').write_text(json.dumps(names))
+          print('GLRD exact branch-name corpus:',len(names))
+          PY
       - name: Native strict-line, wall, error and XML-gate regressions
         run: |
           set -euo pipefail
           GLRD_SOURCE_XML=/tmp/glrd/inputs/source.xml \
           GLRD_STAGE_FILE=/tmp/glrd/inputs/staged.json \
+          GLRD_BRANCH_NAMES_FILE=/tmp/glrd/inputs/branch-names.json \
           node --test \
             tests/xml-cii-preview-strict-line-authority.test.mjs \
             tests/xml-cii-preview-wall-authority-parity.test.mjs \
