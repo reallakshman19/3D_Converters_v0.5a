@@ -179,7 +179,7 @@ def run_one(source, target, kind, out, scale, staged, config):
     warning_text = diagnostic_buffer.getvalue()
     sys.stderr.write(warning_text)
     captured["skippedRestraintNodeNumbers"] = [
-        int(match) for match in re.findall(r"WARNING: Unable to assign restraint for NodeNumber (\\d+); restraint skipped", warning_text)
+        int(match) for match in re.findall(r"WARNING: Unable to assign restraint for NodeNumber (\d+); restraint skipped", warning_text)
     ]
     captured["stagedFlange460"] = staged_flange_record(staged, "=134234934/27950")
     captured.update({
