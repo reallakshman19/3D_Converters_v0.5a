@@ -118,7 +118,7 @@ function rowMarkup(issue, rowIndex) {
   </tr>`;
 }
 
-function popupMarkup(rows, entries) {
+export function modeARigidWeightReviewMarkup(rows, entries) {
   const sourceOptions = entries.map((entry) => `<option value="${attr(entry.sourceId)}">${esc(entry.fileName)}</option>`).join('');
   return `<div class="mc-rigid-review-dialog" role="dialog" aria-modal="true" aria-label="Mode A rigid weight suggestion auto-apply (60–100%) and empirical deviation review (±50%)" style="color:#e2e8f0;max-height:90vh;overflow:auto;background:#0f172a;border:1px solid #253a55;border-radius:8px;padding:18px;max-width:1380px;width:96%;">
     <div style="display:flex;justify-content:space-between;gap:16px;align-items:center;border-bottom:1px solid #253a55;padding-bottom:12px;margin-bottom:12px;">
@@ -166,7 +166,7 @@ export function openModeAConsolidatedRigidWeightReviewPopup(entries = []) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'model-converters-workflow-popup-overlay mc-rigid-review-overlay';
-    overlay.innerHTML = popupMarkup(rows, workingEntries);
+    overlay.innerHTML = modeARigidWeightReviewMarkup(rows, workingEntries);
     document.body.appendChild(overlay);
     const body = overlay.querySelector('[data-mode-a-rigid-body]');
     const status = overlay.querySelector('[data-mode-a-rigid-status]');
