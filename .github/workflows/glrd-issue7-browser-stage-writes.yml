@@ -1,0 +1,136 @@
+name: Issue 7 GLRD Chromium stage write-contract audit
+on:
+  push:
+    branches:
+      - audit/glrd-cache-negative-contract-20261103
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser-stage-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Static audit syntax and fixture builder
+        run: |
+          node --check tests/glrd_issue7_browser_stage_writes.mjs
+          python3 -m pip install --quiet openpyxl
+      - name: Checkout immutable baseline, experiment and test fixture builder
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/glrd/inputs /tmp/glrd/observed
+          git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/phase1
+          git -C /tmp/glrd/phase1 checkout --detach 814157b162b981c9876f564f3cb0474435c8c37e
+          git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/experiment
+          git -C /tmp/glrd/experiment checkout --detach 24917f2855d23473293797edf510872990a9d18c
+          git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/capture
+          git -C /tmp/glrd/capture checkout --detach 19efc37c96b314e4e94194e46d348743207fea6c
+          test "$(git -C /tmp/glrd/phase1 rev-parse HEAD)" = "814157b162b981c9876f564f3cb0474435c8c37e"
+          test "$(git -C /tmp/glrd/experiment rev-parse HEAD)" = "24917f2855d23473293797edf510872990a9d18c"
+          test "$(git -C /tmp/glrd/capture rev-parse HEAD)" = "19efc37c96b314e4e94194e46d348743207fea6c"
+          for p in phase1 experiment capture; do
+            test -z "$(git -C /tmp/glrd/$p status --porcelain --untracked-files=no)"
+          done
+      - name: Fetch pinned original GLRD and master corpus
+        run: |
+          set -euo pipefail
+          SRC="https://raw.githubusercontent.com/reallakshman19/3D_Converters/3377b7f4baeeee5851e72dcc414d6c4a93f5a933/Benchmarks/XML-CII-2019/revamped"
+          MST="https://raw.githubusercontent.com/reallakshman19/3D_Converters/25db94769994751bb0fb6e6d83a578efd9ac8162/docs/docs/Masters"
+          cd /tmp/glrd/inputs
+          curl --retry 4 -fLsS "$SRC/GLRD-1000-PSI-02.xml" -o source.xml
+          curl --retry 4 -fLsS "$SRC/STF_2026Nov03-0839_managed_stage.json" -o staged.json
+          curl --retry 4 -fLsS "$SRC/STD-00-PX-4338-01001-0001-02.xlsx" -o linelist.xlsx
+          curl --retry 4 -fLsS "$MST/Piping_class_master.json" -o piping-class.json
+          curl --retry 4 -fLsS "$MST/wtValveweights.json" -o weight.json
+          curl --retry 4 -fLsS "$MST/PCF_MAT_MAP.TXT" -o material-map.txt
+          test "$(git hash-object source.xml)" = "8c60c9e58995172d48a9d1ebfa23569db5659f06"
+          test "$(git hash-object staged.json)" = "c611f53d6571cae7df51d9ac817a723be493b952"
+          test "$(git hash-object linelist.xlsx)" = "717b41959c9ab47811f47ea4270125f5f257e3c2"
+          test "$(git hash-object piping-class.json)" = "af218bf3692acd66c93e190635633e14ccfb30ac"
+          test "$(git hash-object weight.json)" = "f969d32dfea1bf03eb7dc310d9f3becacad5a4d1"
+          test "$(git hash-object material-map.txt)" = "371ce3a1bd854228650847d8f511e98baa5dc5f3"
+          sha256sum source.xml staged.json linelist.xlsx piping-class.json weight.json material-map.txt | tee /tmp/glrd/observed/input-sha256.txt
+      - name: Build and verify exact effective reference config
+        run: |
+          node --input-type=module -e "import {defaultXmlCii2019SupportConfigJson as f} from '/tmp/glrd/phase1/tabs/xml-cii-2019-standalone/xml-cii-standalone-default-config.js'; process.stdout.write(f());" > /tmp/glrd/inputs/defaults.json
+          python3 /tmp/glrd/capture/tests/glrd_build_reference_browser_config.py \
+            --line-list /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --defaults /tmp/glrd/inputs/defaults.json \
+            --out /tmp/glrd/inputs/config.json \
+            --report /tmp/glrd/observed/config-provenance.json
+          test "$(sha256sum /tmp/glrd/inputs/config.json | cut -d ' ' -f1)" = "292246ab4c97cd388265c70ceb3a613dc8d124debdaffd3ef8b2cf25cb049b05"
+      - name: Observe authentic Phase 1 per-stage configuration writes
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$CHROME_BIN"
+          node tests/glrd_issue7_browser_stage_writes.mjs \
+            --root /tmp/glrd/phase1 --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/observed --label baseline --audit-mode baseline \
+            --expected-sha 814157b162b981c9876f564f3cb0474435c8c37e \
+            --chromium "$CHROME_BIN"
+      - name: Observe authentic experimental per-stage configuration writes
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$CHROME_BIN"
+          node tests/glrd_issue7_browser_stage_writes.mjs \
+            --root /tmp/glrd/experiment --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/observed --label optimized --audit-mode candidate \
+            --expected-sha 24917f2855d23473293797edf510872990a9d18c \
+            --chromium "$CHROME_BIN"
+      - name: Validate output parity, post-call state and trace both write counts
+        run: |
+          set -euo pipefail
+          cmp /tmp/glrd/observed/baseline-preview.json /tmp/glrd/observed/optimized-preview.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d=Path('/tmp/glrd/observed')
+          p=[json.loads((d/(name+'-write-audit.json')).read_text()) for name in ['baseline','optimized']]
+          a,b=p
+          assert a['status']==b['status']=='PASS'
+          assert a['fixtureHash']==b['fixtureHash']
+          assert a['previewSha']==b['previewSha']=='76bedf169f0a6e00e42539e634735d4736f86f205ca0c7be9da145e4c9f0adec'
+          assert a['afterConfig']==b['afterConfig'], 'Post-call config summary differs'
+          assert a['postConfigMatchesWrapper'] and b['postConfigMatchesWrapper']
+          assert a['branchCount']==b['branchCount']==30 and a['nodeRows']==b['nodeRows']==269
+          report={'schema':'glrd-issue7-stage-write-parity-v1','status':'PASS',
+            'baselineCommit':a['sourceSha'],'candidateCommit':b['sourceSha'],
+            'previewSha':a['previewSha'],'samePostConfigSummary':True,
+            'totalWriteAttempts':{'baseline':a['totalWriteAttempts'],'candidate':b['totalWriteAttempts']},
+            'totalChangedWrites':{'baseline':a['totalChangedWrites'],'candidate':b['totalChangedWrites']},
+            'stageWrites':{'baseline':a['writesByStage'],'candidate':b['writesByStage']},
+            'cacheStats':b['cacheStats'],
+            'interpretation':'Instrumented subset of config.weight setter calls in one pinned GLRD build, not proof of transitive invariance for other configurations or UI'}
+          (d/'stage-write-compare.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+      - name: Upload audit artifacts even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glrd-issue7-stage-write-trace
+          path: /tmp/glrd/observed/
+          if-no-files-found: warn
+          retention-days: 14
