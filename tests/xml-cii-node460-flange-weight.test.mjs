@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { xmlCiiPhysicalComponentSpanLengthMm } from '../converters/xml-cii2019-core/weight-match-model.js';
 import { buildXmlCiiFlangeWeightFallback } from '../converters/xml-cii2019-core/flange-weight-fallback.js';
 
@@ -29,4 +30,14 @@ assert.equal(buildXmlCiiFlangeWeightFallback({ ...base, lengthMm: 608.3 }, confi
   '608.3 mm route distance must not amplify a 109 mm flange weight');
 assert.equal(buildXmlCiiFlangeWeightFallback({ ...base, rating: 1500, lengthMm: span }, config)?.suggestedWeight, 14,
   'correct 1500# flange suggestion is approximately 14 kg');
+if (process.env.GLRD_WEIGHT_MASTER_PATH) {
+  const rows = JSON.parse(readFileSync(process.env.GLRD_WEIGHT_MASTER_PATH, 'utf8'));
+  const actual = { weight: { masterRows: rows } };
+  for (const [rating, weight] of [[900, 15], [1500, 14]]) {
+    const matched = buildXmlCiiFlangeWeightFallback({ ...base, rating, lengthMm: span }, actual);
+    assert.equal(matched?.suggestedWeight, weight, `historical master flange weight for rating ${rating}`);
+    assert.equal(buildXmlCiiFlangeWeightFallback({ ...base, rating, lengthMm: 608.3 }, actual), null,
+      'real master must not extrapolate through an unrelated pipe span');
+  }
+}
 console.log('Node 460 component span and flange fallback tests: PASS');

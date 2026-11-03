@@ -20,6 +20,7 @@ jobs:
           curl --retry 3 --fail --location --silent --show-error "$root/GLRD-1000-PSI-02.xml" -o /tmp/glrd-reference/GLRD-1000-PSI-02.xml
           curl --retry 3 --fail --location --silent --show-error "$root/STD-00-PX-4338-01001-0001-02.xlsx" -o /tmp/glrd-reference/linelist.xlsx
           curl --retry 3 --fail --location --silent --show-error "$root/STF_2026Nov03-0839_managed_stage.json" -o /tmp/glrd-reference/stage.json
+          curl --retry 3 --fail --location --silent --show-error "https://raw.githubusercontent.com/reallakshman19/3D_Converters/25db94769994751bb0fb6e6d83a578efd9ac8162/docs/docs/Masters/wtValveweights.json" -o /tmp/glrd-reference/wtValveweights.json
           sha256sum /tmp/glrd-reference/*
           wc -c /tmp/glrd-reference/*
       - name: Preserve source evidence
@@ -42,6 +43,7 @@ jobs:
         run: |
           python3 tests/xml-cii-runtime-custody.test.py
           node tests/xml-cii-mode-a-consolidated-rigid-review.test.mjs
+          GLRD_WEIGHT_MASTER_PATH=/tmp/glrd-reference/wtValveweights.json node tests/xml-cii-node460-flange-weight.test.mjs
       - name: Upload reference replay evidence
         if: always()
         uses: actions/upload-artifact@v4
