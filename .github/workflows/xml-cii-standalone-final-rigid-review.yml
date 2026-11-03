@@ -49,6 +49,32 @@ jobs:
           assert edge['from']==450 and edge['to']==460
           print('Real-source GLRD Node 460 remains 15 kg / 150 N, correct original component-span scenario.')
           PY
+      - name: Verify reviewed 939 to 10020 mass becomes exact Python CII RIGID payload
+        run: |
+          python3 - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, 'converters/scripts')
+          import xml_to_cii2019 as engine
+          root=Path('/tmp/final-review-glrd')
+          for mass in [15.0, 1.5]:
+              source=root/f'939-10020-{mass}.xml'
+              output=root/f'939-10020-{mass}.cii'
+              source.write_text(f'''<PipeStressExport><Pipe><Branch><Branchname>B-939</Branchname>
+              <Node><NodeNumber>930</NodeNumber><ComponentType>FLAN</ComponentType><ComponentRefNo>=FLANGE-1</ComponentRefNo><Endpoint>1</Endpoint><Position>0 0 0</Position></Node>
+              <Node><NodeNumber>939</NodeNumber><ComponentType>PIPE</ComponentType><Position>89.9 0 0</Position></Node>
+              <Node><NodeNumber>10020</NodeNumber><ComponentType>RIGID</ComponentType><Rigid>2</Rigid><Endpoint>2</Endpoint><Position>109 0 0</Position><ComponentRefNo>=FLANGE-1</ComponentRefNo><Weight>{mass}</Weight></Node>
+              </Branch></Pipe></PipeStressExport>''')
+              document=engine._parse_xml_document(source)
+              model=engine._build_conversion_model(document)
+              matches=[edge for edge in model.rigid_edges if edge.from_node.node_number==939 and edge.to_node.node_number==10020]
+              assert len(matches)==1, '939 to 10020 must survive in true Python CII model'
+              assert abs(engine._rigid_weight_for_edge(matches[0])-mass)<1e-9
+              rigid=engine._build_rigid_payload(model,weight_scale=10)
+              assert len(rigid)==1 and abs(float(rigid[0].split()[0]) - mass*10)<1e-8,rigid
+              output.write_text(engine._build_cii_text(model,'first',engine.DEFAULT_VERSION_LINE,10))
+              print(f'Python CII edge 939 -> 10020 = {mass} kg -> {mass*10} N; 19.1 mm')
+          PY
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
