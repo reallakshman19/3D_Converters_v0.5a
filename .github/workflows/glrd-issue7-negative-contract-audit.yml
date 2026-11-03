@@ -1,0 +1,46 @@
+name: Issue 7 GLRD adversarial cache and line-list contract audit
+on:
+  push:
+    branches:
+      - audit/glrd-cache-negative-contract-20261103
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  negative-contract-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Assert pinned audit foundation; no unreviewed product changes
+        run: |
+          set -euo pipefail
+          git status --porcelain
+          git merge-base --is-ancestor 24917f2855d23473293797edf510872990a9d18c HEAD
+          git diff --name-only 24917f2855d23473293797edf510872990a9d18c HEAD
+          DIFF="$(git diff --name-only 24917f2855d23473293797edf510872990a9d18c HEAD)"
+          if echo "$DIFF" | grep -E -v '^tests/glrd_issue7_negative_contract_audit\.test\.mjs$|^\.github/workflows/glrd-issue7-negative-contract-audit\.yml$'; then
+            echo "Unexpected production change in audit branch"
+            exit 1
+          fi
+      - name: Verify expected red counterexamples and unchanged-config control
+        run: |
+          node --test tests/glrd_issue7_negative_contract_audit.test.mjs 2>&1 | tee issue7-audit.log
+          echo "These are intentionally EXPECTED divergences, not cache approval."
+          grep -q 'AUDIT_COUNTEREXAMPLE .*"id":"D-01a"' issue7-audit.log
+          grep -q 'AUDIT_COUNTEREXAMPLE .*"id":"D-01b"' issue7-audit.log
+          grep -q 'AUDIT_COUNTEREXAMPLE .*"id":"D-01c"' issue7-audit.log
+          grep -q 'AUDIT_COUNTEREXAMPLE .*"id":"B-01"' issue7-audit.log
+      - name: Preserve reproducible evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glrd-issue7-adversarial-contract-audit
+          path: issue7-audit.log
+          if-no-files-found: warn
+          retention-days: 14
