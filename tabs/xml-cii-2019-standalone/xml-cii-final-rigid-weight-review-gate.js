@@ -118,7 +118,13 @@ export function buildStandaloneFinalRigidReview(parity, config = {}, options = {
     }
     seen.set(issue.key, identity);
   }
-  const splitCustody = applyXmlCiiSplitRigidWeightPropagation(xmlText);
+  const ownership = config?.rigidOwnership || {};
+  const splitCustody = applyXmlCiiSplitRigidWeightPropagation(xmlText, {
+    sourceId: options.sourceId || '',
+    snapshotDigest: options.snapshotDigest || '',
+    ownershipAllocations: ownership.allocations || {},
+    requireAllocation: ownership.requireAllocation === true,
+  });
   return { audit, issues, xmlText, splitCustody };
 }
 
@@ -138,6 +144,8 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
     {
       kgToNewton: job?.options?.kgToNewton !== false,
       stagedJsonText: job?.stagedJsonText || '',
+      sourceId: job?.sourceId || job?.sourceName || '',
+      snapshotDigest: job?.verifiedWeightSnapshotDigest || '',
     },
   );
   // Empirical plausibility never overrides a split component with multiple
@@ -153,7 +161,7 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
       ...gate,
     };
   }
-  if (!gate.issues.length) return { ok: true, xmlText: gate.xmlText, audit: gate.audit, reviewedRows: [], issues: [] };
+  if (!gate.issues.length) return { ok: true, xmlText: gate.xmlText, audit: gate.audit, splitCustody: gate.splitCustody, reviewedRows: [], issues: [] };
   const identification = gate.issues.map((item) => `${item.fromNode || '?'} → ${item.toNode}: ${item.reviewFlags.join('/')}`).join('; ');
   if (typeof runtime.reviewFinalRigidWeights !== 'function') {
     return { ok: false, error: `Final rigid weight review required before CII export: ${identification}. No review dialog is connected.`, ...gate };
@@ -177,7 +185,12 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   if (applied.appliedCount !== gate.issues.length) {
     return { ok: false, error: `Final rigid weight changes affected ${applied.appliedCount} node(s); expected ${gate.issues.length}. Ambiguous target or missing node: CII export blocked.`, ...gate };
   }
-  const afterReviewCustody = applyXmlCiiSplitRigidWeightPropagation(applied.xmlText);
+  const afterReviewCustody = applyXmlCiiSplitRigidWeightPropagation(applied.xmlText, {
+    sourceId: job?.sourceId || job?.sourceName || '',
+    snapshotDigest: job?.verifiedWeightSnapshotDigest || '',
+    ownershipAllocations: config?.rigidOwnership?.allocations || {},
+    requireAllocation: config?.rigidOwnership?.requireAllocation === true,
+  });
   if (afterReviewCustody.ownershipIssues.length) {
     const first = afterReviewCustody.ownershipIssues[0];
     return { ok: false,
@@ -194,5 +207,5 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   if (typeof runtime.onFinalRigidWeightsApplied === 'function') {
     await runtime.onFinalRigidWeightsApplied({ weightsByKey: permitted, reviewedRows });
   }
-  return { ok: true, xmlText: applied.xmlText, audit: gate.audit, reviewedRows, issues: gate.issues };
+  return { ok: true, xmlText: applied.xmlText, audit: gate.audit, splitCustody: afterReviewCustody, reviewedRows, issues: gate.issues };
 }
