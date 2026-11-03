@@ -9,6 +9,7 @@
 
 import { enrichStandaloneDtxrAnnotations } from './xml-cii-standalone-dtxr-enrichment.js';
 import { createStandaloneRunParityEvidence } from './xml-cii-run-parity-evidence.js';
+import { qualifiedXmlCiiRigidAutoWeightCandidate } from '../../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
 
 const PARITY_MODULE_URL = new URL(
   '../model-converters/converters/xmltocii2019_helper/enrichment-run-parity.js',
@@ -74,18 +75,39 @@ const WEIGHT_BEARING_TYPES = new Set(['FLAN', 'VALV', 'RIGID', 'INST']);
 
 function mappedNodeWeights(nodeRows, config) {
   const weights = new Map();
+  const reviewProposals = [];
   for (const nr of nodeRows || []) {
     if (!WEIGHT_BEARING_TYPES.has(text(nr.componentType).toUpperCase())) continue;
     const override = Number(config?.overrides?.rigidWeight?.[nr.key]);
-    const auto = nr.weightMatch && !nr.weightMatch.zeroFallback ? Number(nr.weightMatch.weight) : NaN;
-    const weight = Number.isFinite(override) && override > 0 ? override : (Number.isFinite(auto) && auto > 0 ? auto : null);
-    if (weight !== null) weights.set(`${text(nr.branchName)}|${text(nr.nodeNumber)}`, weight);
+    const proposed = nr.weightMatch && !nr.weightMatch.zeroFallback ? Number(nr.weightMatch.weight) : NaN;
+    const hasOverride = Number.isFinite(override) && override > 0;
+    const best = nr.weightCandidates?.[0] || nr.weightMatch || null;
+    const qualified = qualifiedXmlCiiRigidAutoWeightCandidate({ ...nr, ranking: { best } });
+    const shortHeavy = Number(nr.lengthMm) > 6 && Number(nr.lengthMm) <= 40 && proposed >= 10;
+    // No ranked, inferred or extrapolated proposal is permitted to become a
+    // physical node mass merely because Preview selected a "best" candidate.
+    const isDirectApproved = qualified
+      && Math.abs(qualified.weightKg - proposed) < 1e-9
+      && !shortHeavy;
+    if (hasOverride || (Number.isFinite(proposed) && proposed > 0 && isDirectApproved)) {
+      weights.set(`${text(nr.branchName)}|${text(nr.nodeNumber)}`, hasOverride ? override : proposed);
+    } else if (Number.isFinite(proposed) && proposed > 0) {
+      reviewProposals.push({
+        key: text(nr.key), branchName: text(nr.branchName),
+        toNode: text(nr.nodeNumber), componentType: text(nr.componentType),
+        componentRefNo: text(nr.componentRefNo), endpoint: text(nr.endpoint),
+        elementLengthMm: Number(nr.lengthMm) || null, proposedWeightKg: proposed,
+        currentWeightKg: 0, candidate: best,
+        weightOrigin: 'unreviewed-preview-weight-proposal',
+        reviewFlags: [shortHeavy ? 'SHORT_HEAVY_WEIGHT_CANDIDATE' : 'UNQUALIFIED_AUTO_WEIGHT_PROPOSAL'],
+      });
+    }
   }
-  return weights;
+  return { weights, reviewProposals };
 }
 
 async function applyStandaloneProcessParity(xmlText, config, stagedJsonText, diagnostics) {
-  const result = { xmlText, branchRows: [], nodeRows: [], expectedEntries: [], appliedFields: 0 };
+  const result = { xmlText, branchRows: [], nodeRows: [], expectedEntries: [], reviewProposals: [], appliedFields: 0 };
   if (typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') {
     throw new Error('DOMParser/XMLSerializer is unavailable for standalone run parity enrichment.');
   }
@@ -95,7 +117,8 @@ async function applyStandaloneProcessParity(xmlText, config, stagedJsonText, dia
   result.nodeRows = Array.isArray(preview?.nodeRows) ? preview.nodeRows : [];
   if (!result.branchRows.length) return result;
 
-  const nodeWeights = mappedNodeWeights(result.nodeRows, config);
+  const { weights: nodeWeights, reviewProposals } = mappedNodeWeights(result.nodeRows, config);
+  result.reviewProposals = reviewProposals;
   const byBranch = new Map(result.branchRows.map((row) => [text(row.branchName), row]));
   const document = new DOMParser().parseFromString(xmlText, 'application/xml');
   if (document.getElementsByTagName('parsererror').length) throw new Error('Standalone run parity could not parse the enriched XML.');
@@ -208,6 +231,7 @@ export async function enrichStandaloneXmlForRun(job, extraOptions = {}) {
     branchRows: [],
     nodeRows: [],
     expectedEntries: [],
+    reviewProposals: [],
   };
   if (!sourceText.trim()) {
     out.error = 'Standalone run parity requires non-empty XML source text.';
@@ -245,6 +269,7 @@ export async function enrichStandaloneXmlForRun(job, extraOptions = {}) {
     out.branchRows = process.branchRows;
     out.nodeRows = process.nodeRows;
     out.expectedEntries = process.expectedEntries;
+    out.reviewProposals = process.reviewProposals;
     out.evidence = createStandaloneRunParityEvidence({
       xmlText: out.xmlText,
       expectedEntries: out.expectedEntries,
