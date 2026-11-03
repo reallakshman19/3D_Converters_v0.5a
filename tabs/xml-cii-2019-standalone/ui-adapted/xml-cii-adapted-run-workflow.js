@@ -3,6 +3,7 @@ import { buildStandaloneOutputRunReadiness } from '../xml-cii-output-run-readine
 import { buildXmlCiiWorkflowJobFromUiState } from '../xml-cii-workflow-ui-adapter.js';
 import { applyStandaloneOutputRunReadiness, updateWorkflowState, xmlCiiEnrichedConfigFromState, saveMasterContextToLocalStorage } from './xml-cii-adapted-state.js';
 import { qualifiedXmlCiiRigidAutoWeightCandidate } from '../../../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
+import { openStandaloneFinalRigidWeightReviewPopup } from './xml-cii-adapted-final-rigid-weight-popup.js';
 import {
   resolveStandaloneWeightReviewRating,
   standaloneWeightReviewRatingInfo,
@@ -243,7 +244,21 @@ export async function runWorkflowFromUi(stateRef, render) {
   stateRef.current = updateWorkflowState(stateRef.current, { running: true, result: null });
   render();
   try {
-    const result = await runXmlCii2019Workflow(await buildXmlCiiWorkflowJobFromUiState(stateRef.current));
+    const result = await runXmlCii2019Workflow(
+      await buildXmlCiiWorkflowJobFromUiState(stateRef.current),
+      {
+        reviewFinalRigidWeights: (issues, options) => openStandaloneFinalRigidWeightReviewPopup(issues, options),
+        onFinalRigidWeightsApplied: ({ weightsByKey }) => {
+          const config = xmlCiiEnrichedConfigFromState(stateRef.current);
+          config.overrides = { ...(config.overrides || {}), rigidWeight: { ...(config.overrides?.rigidWeight || {}), ...weightsByKey } };
+          stateRef.current.supportConfigJson = JSON.stringify(config, null, 2);
+          if (stateRef.current.masterContext) {
+            stateRef.current.masterContext.config = config;
+            saveMasterContextToLocalStorage(stateRef.current.masterContext);
+          }
+        },
+      },
+    );
     stateRef.current = updateWorkflowState(stateRef.current, { result });
   } finally {
     stateRef.current = applyStandaloneOutputRunReadiness(
