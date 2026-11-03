@@ -2,6 +2,7 @@ import { resolveStandaloneWeightReviewRating, standaloneWeightReviewRatingInfo }
 import { collectXmlCiiZeroRigidWeightIssues } from '../../../converters/xml-cii2019-core/weight-match-model.js';
 import { applyXmlCiiFlangeWeightFallbackToIssue } from '../../../converters/xml-cii2019-core/flange-weight-fallback.js';
 import { rankXmlCiiWeightCandidates } from '../../../converters/xml-cii2019-core/weight-valve-hints.js';
+import { qualifiedXmlCiiRigidAutoWeightCandidate } from '../../../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
 import { flattenModeARigidReviewEntries } from './xml-cii-adapted-rigid-review-mode-a-state.js';
 
 const esc = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -57,7 +58,7 @@ function candidateButtons(issue, rowIndex) {
 }
 
 function rowMarkup(issue, rowIndex) {
-  const best = issue.candidates?.[0] || null;
+  const safe = qualifiedXmlCiiRigidAutoWeightCandidate(issue);
   const info = ratingInfo(issue);
   const badge = info.conflict
     ? '<span title="Rating conflict with DTXR" style="color:#fca5a5;font-weight:700;"> !</span>'
@@ -71,7 +72,7 @@ function rowMarkup(issue, rowIndex) {
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);">${esc(issue.nodeNumberDisplay || issue.nodeNumber)}</td>
     <td title="${attr(issue.dtxrSourcePath || '')}" style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);min-width:180px;">${esc(issue.dtxr || 'Not found')}</td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);white-space:nowrap;">${esc(issue.lengthMm == null ? '' : `${Number(issue.lengthMm).toFixed(1)} mm`)}</td>
-    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);"><input type="number" min="0" step="0.001" class="mc-rigid-review-input" data-review-id="${attr(issue.reviewId)}" data-source-id="${attr(issue.sourceId)}" data-issue-key="${attr(issue.key)}" value="${attr(best ? (best.suggestedWeight ?? best.selectedWeight ?? best.weight ?? '') : '')}" placeholder="kg" style="width:78px;background:#101827;color:#fff;border:1px solid #31455f;border-radius:4px;padding:4px;"></td>
+    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);"><input type="number" min="0" step="0.001" class="mc-rigid-review-input" data-review-id="${attr(issue.reviewId)}" data-source-id="${attr(issue.sourceId)}" data-issue-key="${attr(issue.key)}" value="${attr(safe?.weightKg ?? '')}" placeholder="kg" style="width:78px;background:#101827;color:#fff;border:1px solid #31455f;border-radius:4px;padding:4px;"></td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);min-width:300px;">${candidateButtons(issue, rowIndex) || '<span style="color:#64748b;">No suggestion</span>'}</td>
   </tr>`;
 }
@@ -83,12 +84,12 @@ function popupMarkup(rows, entries) {
       <div><div style="font-size:18px;font-weight:700;color:#9cc5ff;">Rigid Weights Need Review — Consolidated</div><div data-mode-a-rigid-summary style="font-size:12px;color:#94a3b8;margin-top:4px;">${rows.length} rigid node(s) across ${entries.length} XML file(s).</div></div>
       <button type="button" data-mode-a-rigid-cancel style="cursor:pointer;background:transparent;border:1px solid #475569;border-radius:6px;color:#94a3b8;padding:6px 12px;">Cancel Batch Run</button>
     </div>
-    <div style="background:#2a210b;border:1px solid #7c5a18;color:#ffe7a3;padding:9px;border-radius:6px;font-size:12px;margin-bottom:10px;">One review gate covers all enabled XML models. Source identity is preserved; Rating and Weight changes are written only to that XML. “Use All Exact Suggestions” fills only preferred exact candidates. Enter mass in kg; the optional kg→N CII export conversion applies ×10 only at output.</div>
+    <div style="background:#2a210b;border:1px solid #7c5a18;color:#ffe7a3;padding:9px;border-radius:6px;font-size:12px;margin-bottom:10px;">One review gate covers all enabled XML models. Source identity is preserved; Rating and Weight changes are written only to that XML. “Use All Safe Suggestions (60–100%)” fills only direct master candidates with a verified rating, bore and component length. Inferred or lower-confidence suggestions require review. Enter mass in kg; the optional kg→N CII export conversion applies ×10 only at output.</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
       <input type="search" data-mode-a-rigid-search placeholder="Search source / branch / node..." style="min-width:250px;padding:6px;background:#0b1220;color:#e2e8f0;border:1px solid #475569;border-radius:5px;">
       <select data-mode-a-rigid-source style="padding:6px;background:#0b1220;color:#e2e8f0;border:1px solid #475569;border-radius:5px;"><option value="">All XML files</option>${sourceOptions}</select>
       <button type="button" data-mode-a-rigid-refresh style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:7px 12px;">Refresh Suggestions</button>
-      <button type="button" data-mode-a-rigid-fill-exact style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:7px 12px;">Use All Exact Suggestions</button>
+      <button type="button" data-mode-a-rigid-fill-exact style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:7px 12px;">Use All Safe Suggestions (60–100%)</button>
       <span data-mode-a-rigid-status style="font-size:12px;color:#94a3b8;"></span>
     </div>
     <div style="overflow:auto;max-height:55vh;border:1px solid rgba(148,163,184,.15);border-radius:6px;"><table style="border-collapse:collapse;font-size:12px;width:100%;text-align:left;"><thead><tr style="background:rgba(30,41,59,.55);color:#fff;position:sticky;top:0;z-index:1;"><th style="padding:7px;">Source XML</th><th style="padding:7px;">Branch</th><th style="padding:7px;">Bore</th><th style="padding:7px;">Rating</th><th style="padding:7px;">Node</th><th style="padding:7px;">DTXR</th><th style="padding:7px;">Length</th><th style="padding:7px;">Manual Weight (kg)</th><th style="padding:7px;">Nearest Suggestions</th></tr></thead><tbody data-mode-a-rigid-body>${rows.map(rowMarkup).join('')}</tbody></table></div>
@@ -155,13 +156,12 @@ export function openModeAConsolidatedRigidWeightReviewPopup(entries = []) {
     overlay.querySelector('[data-mode-a-rigid-fill-exact]')?.addEventListener('click', () => {
       let count = 0;
       rows.forEach((row, index) => {
-        const best = row.candidates?.[0];
-        const value = Number(best?.suggestedWeight ?? best?.selectedWeight ?? best?.weight);
-        if (!best?.preferred || !Number.isFinite(value) || value <= 0) return;
+        const value = qualifiedXmlCiiRigidAutoWeightCandidate(row)?.weightKg;
+        if (!Number.isFinite(value) || value <= 0) return;
         const input = overlay.querySelectorAll('.mc-rigid-review-input')[index];
         if (input) { input.value = String(value); count += 1; }
       });
-      setStatus(`Filled ${count} preferred exact suggestion(s). Review remaining rows manually.`, false);
+      setStatus(`Filled ${count} qualified 60–100% direct suggestions; low-confidence, inferred, and length-mismatched weights remain for manual review.`, false);
     });
 
     overlay.querySelector('[data-mode-a-rigid-refresh]')?.addEventListener('click', async () => {
