@@ -142,5 +142,8 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
     previousWeightKg: issue.currentWeightKg, approvedWeightKg: permitted[issue.key],
     reviewFlags: issue.reviewFlags, status: 'EXPLICITLY_REVIEWED',
   }));
+  if (typeof runtime.onFinalRigidWeightsApplied === 'function') {
+    await runtime.onFinalRigidWeightsApplied({ weightsByKey: permitted, reviewedRows });
+  }
   return { ok: true, xmlText: applied.xmlText, audit: gate.audit, reviewedRows, issues: gate.issues };
 }
