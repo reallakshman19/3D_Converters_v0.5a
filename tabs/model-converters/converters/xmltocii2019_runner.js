@@ -191,6 +191,18 @@ export async function run(context) {
   const runValues = context.options || {};
   const stem = baseNameWithoutExtension(primary.name);
   if (runValues.createEnrichedXml === false) {
+    // Direct XML->Python mode must not bypass structural RIGID split validation.
+    const directConfig = parseSupportConfig(runValues);
+    const directCustody = applyXmlCiiSplitRigidWeightPropagation(originalXmlText, {
+      sourceId: runValues.sourceId || primary.name || '',
+      ownershipAllocations: directConfig?.rigidOwnership?.allocations || {},
+      requireAllocation: directConfig?.rigidOwnership?.requireAllocation === true,
+    });
+    if (directCustody.ownershipIssues?.length) {
+      const first = directCustody.ownershipIssues[0];
+      throw new Error('Direct Python export blocked: unresolved RIGID split mass ownership at ' +
+        first.branchName + ' / ' + first.componentRefNo + ' (' + first.reason + ').');
+    }
     if (!context.workerRunner) throw new Error('Python worker runtime is not available.');
     context.setStatus?.('Starting Python worker...', 'running');
     const serializableOptions = Object.fromEntries(Object.entries(runValues).filter(([, v]) => typeof v !== 'function'));
