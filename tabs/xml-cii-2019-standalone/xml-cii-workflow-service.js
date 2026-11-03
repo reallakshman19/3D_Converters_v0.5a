@@ -145,6 +145,7 @@ export async function runXmlCii2019WorkflowService(job, runtime = {}) {
     normalized.diagnostics.converterInputDigest = digestXmlCiiParityText(finalReview.xmlText);
     normalized.diagnostics.finalRigidWeightAudit = finalReview.audit;
     normalized.diagnostics.splitRigidOwnershipLedger = finalReview.splitCustody?.componentLedger || [];
+    normalized.diagnostics.rigidOwnershipSnapshotDigest = finalReview.snapshotDigest;
     normalized.diagnostics.splitRigidOwnershipIssues = finalReview.splitCustody?.ownershipIssues || [];
     normalized.diagnostics.finalRigidWeightReview = {
       reviewedRows: finalReview.reviewedRows,
