@@ -117,6 +117,35 @@ jobs:
           (out/'GLRD-weight-split-Python-CII-reconciliation.json').write_text(json.dumps(report,indent=2)+'\n')
           print('GLRD_SPLIT_PYTHON_CII',json.dumps(report))
           PY
+      - name: Prove duplicated CII mass on synthetic surviving 19.1 mm RIGID edge
+        run: |
+          set -euo pipefail
+          python3 converters/scripts/xml_to_cii2019_runtime_custody.py --input /tmp/glrd-preview/results/SYNTHETIC-surviving-rigid-before.xml --output /tmp/glrd-preview/results/SYNTHETIC-surviving-rigid-before.cii --coords-mode first --weight-scale 10
+          python3 converters/scripts/xml_to_cii2019_runtime_custody.py --input /tmp/glrd-preview/results/SYNTHETIC-surviving-rigid-after.xml --output /tmp/glrd-preview/results/SYNTHETIC-surviving-rigid-after.cii --coords-mode first --weight-scale 10
+          python3 - <<'PY'
+          import json, math, sys
+          from pathlib import Path
+          sys.path.insert(0,'converters/scripts')
+          import xml_to_cii2019 as base
+          out=Path('/tmp/glrd-preview/results')
+          report={}
+          for label in ('before','after'):
+            name='SYNTHETIC-surviving-rigid-'+label
+            doc=base._parse_xml_document(out/(name+'.xml'))
+            model=base._build_conversion_model(doc)
+            mass={ (edge.from_node.node_number,edge.to_node.node_number):base._rigid_weight_for_edge(edge) for edge in model.rigid_edges }
+            lines=(out/(name+'.cii')).read_text().split('#$ RIGID\n',1)[1].split('#$ ',1)[0].splitlines()
+            output=[float(line.split()[0]) for line in lines if line.split()]
+            report[label]={'rawEdgesKg':{str(k):v for k,v in mass.items()},'ciiPositiveN':[v for v in output if v>0],'ciiRigidTotalN':sum(output)}
+          assert math.isclose(report['before']['rawEdgesKg']['(930, 939)'],15)
+          assert math.isclose(report['after']['rawEdgesKg']['(930, 939)'],0)
+          assert math.isclose(report['before']['rawEdgesKg']['(939, 10020)'],15)
+          assert math.isclose(report['after']['rawEdgesKg']['(939, 10020)'],15)
+          assert math.isclose(report['before']['ciiRigidTotalN'],300)
+          assert math.isclose(report['after']['ciiRigidTotalN'],150)
+          (out/'SYNTHETIC-rigid-split-CII-diff.json').write_text(json.dumps(report,indent=2)+'\n')
+          print('SYNTHETIC_SPLIT_CII_MASS_REPRO',json.dumps(report))
+          PY
       - name: Weight Match and RIGID regression suite
         run: |
           set -euo pipefail
