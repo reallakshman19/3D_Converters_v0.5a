@@ -99,7 +99,7 @@ globalThis.window=uiDom.window;
 globalThis.document=uiDom.window.document;
 const modeA=openModeAConsolidatedRigidWeightReviewPopup(entries);
 const overlay=document.querySelector('.mc-rigid-review-overlay');
-assert.ok(overlay,'Mode A consolidated dialog must render');
+assert.ok(overlay,`Mode A dialog absent: children=${document.body.children.length}; markup=${document.body.innerHTML.slice(0,300)}; flat=${flattenModeARigidReviewEntries(entries).length}`);
 assert.match(overlay.textContent,/Suggestion auto-apply: match confidence 60–100%/);
 assert.match(overlay.textContent,/±50%/);
 assert.match(overlay.textContent,/Apply Eligible Suggestions \(60–100%\)/);
