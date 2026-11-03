@@ -33,14 +33,14 @@ export function xmlCiiEmpiricalWeightValidationInput(auditRow, issue) {
   ];
   const candidate = candidates.find((item) => item.preferred && item.rowData)
     || candidates.find((item) => item.rowData)
-    || candidates.find((item) => item.typeDesc) || null;
+    || candidates.find((item) => item.typeDesc && !item.zeroFallback && !item.fallbackSuggestion) || null;
   const row = candidate?.rowData || {};
   return {
     rowId: `${auditRow.branchName}::${auditRow.fromNode}->${auditRow.toNode}`,
     source: auditRow.weightOrigin,
     componentRefNo: auditRow.componentRefNo,
     nodeNumber: auditRow.toNode,
-    typeDesc: text(row.TypeDesc || row.typeDesc || candidate?.typeDesc || issue?.typeDesc || auditRow.nodeName),
+    typeDesc: text(row.TypeDesc || row.typeDesc || candidate?.typeDesc || auditRow.nodeName || issue?.typeDesc),
     ns: row.NS ?? row.ns ?? issue?.ns,
     dn: auditRow.boreMm ?? issue?.boreMm,
     rating: auditRow.rating || issue?.rating,
