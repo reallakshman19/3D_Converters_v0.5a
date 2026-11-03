@@ -10,7 +10,10 @@ function weightOf(candidate = {}) {
   const value = Number(candidate.selectedWeight ?? candidate.suggestedWeight ?? candidate.weight);
   return Number.isFinite(value) && value > 0 ? value : null;
 }
-function confidenceOf(candidate = {}) {
+export const XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT = 60;
+export const XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT = 100;
+
+export function xmlCiiWeightSuggestionConfidence(candidate = {}) {
   const raw = Number(candidate.totalScore ?? candidate.score);
   if (!Number.isFinite(raw)) return null;
   const score = raw > 1 ? raw / 100 : raw;
@@ -21,13 +24,17 @@ function bestCandidate(issue = {}) {
 }
 
 /**
- * Preview autofill is qualified by the existing empirical A1/A2 API.
- * No arbitrary 60% confidence, 1mm bore, or short/heavy size gate.
+ * Automatic weight suggestions require 60–100% match confidence (user policy)
+ * AND empirical A1/A2 estimates within ±50%. No element-length or mass
+ * shortcut can bypass either gate. Manual review handles all other candidates.
  */
 export function qualifiedXmlCiiRigidAutoWeightCandidate(issue = {}, options = {}) {
   const candidate = bestCandidate(issue);
   const proposedWeightKg = weightOf(candidate);
+  const confidence = xmlCiiWeightSuggestionConfidence(candidate);
   if (!candidate || proposedWeightKg === null || candidate.zeroFallback || issue.ratingConflict || issue.pipingClassNeedsReview) return null;
+  if (confidence === null || confidence * 100 < XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT
+      || confidence * 100 > XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT) return null;
   const masters = Array.isArray(options.masterRows) && options.masterRows.length
     ? { masterRows: options.masterRows } : {};
   const validator = options.validator || createEmpiricalWeightValidator(masters);
@@ -42,7 +49,7 @@ export function qualifiedXmlCiiRigidAutoWeightCandidate(issue = {}, options = {}
     abnormalityThresholdPct: XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT,
   });
   if (empiricalEvidence.status === 'UNVALIDATED' || empiricalEvidence.reportableAbnormality) return null;
-  return { candidate, weightKg: proposedWeightKg, confidence: confidenceOf(candidate), empiricalEvidence };
+  return { candidate, weightKg: proposedWeightKg, confidence, empiricalEvidence };
 }
 export function collectXmlCiiAutoRigidWeightsFromIssues(issues = [], options = {}) {
   const weightsByKey = {}, appliedRows = [], remainingIssues = [];
@@ -59,11 +66,11 @@ export function collectXmlCiiAutoRigidWeightsFromIssues(issues = [], options = {
       type: 'rigid-weight-auto-applied', branchName: issue.branchName || '', nodeNumber: issue.nodeNumber || '',
       componentType: issue.componentType || '', componentRefNo: issue.componentRefNo || '', boreMm: issue.boreMm,
       rating: issue.rating, lengthMm: issue.lengthMm, weight: weightKg, confidence,
-      method: 'empirically-validated-a1-a2-within-50-percent',
+      method: 'confidence-60-to-100-and-empirical-a1-a2-within-50-percent',
       candidateType: candidate.type || candidate.valveType || '', candidateTypeDesc: candidate.typeDesc || '',
       weightMethod: candidate.weightMethod || '', lengthDelta: candidate.lengthDelta,
       semanticSource: candidate.semanticSource || '', semanticReason: candidate.semanticReason || '',
-      message: `Auto-applied ${weightKg} kg; available empirical A1/A2 estimates are within ±50%.`,
+      message: `Auto-applied ${weightKg} kg (${Math.round(confidence * 100)}% match confidence); available empirical A1/A2 estimates are within ±50%.`,
     });
   }
   return { weightsByKey, appliedRows, remainingIssues, appliedCount: appliedRows.length };
