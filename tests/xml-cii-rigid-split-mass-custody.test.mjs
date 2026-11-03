@@ -70,6 +70,92 @@ const rejected = await enforceStandaloneFinalRigidWeightReview(
 assert.equal(rejected.ok, false, 'standalone export must fail closed on duplicated split masses');
 assert.match(rejected.error, /Structural RIGID mass ownership unresolved/);
 
+// Scope component groups to contiguous physical occurrences, not a reused
+// engineering Branchname / ComponentRefNo / NodeNumber combination.
+const repeatedRef = sample.replace(
+  '</Branch>',
+  '<Node><NodeNumber>3</NodeNumber><ComponentType>PIPE</ComponentType><Position>5 0 0</Position></Node>' +
+  '<Node><NodeNumber>1</NodeNumber><ComponentRefNo>=F</ComponentRefNo><ComponentType>FLAN</ComponentType><Endpoint>1</Endpoint><Weight>0</Weight></Node>' +
+  '<Node><NodeNumber>2</NodeNumber><ComponentRefNo>=F</ComponentRefNo><ComponentType>RIGID</ComponentType><Endpoint>2</Endpoint><Weight>20</Weight></Node></Branch>'
+);
+const separateOccurrences = applyXmlCiiSplitRigidWeightPropagation(repeatedRef, { sourceId: 'model-A' });
+assert.equal(separateOccurrences.componentLedger.length, 2);
+assert.equal(separateOccurrences.ownershipIssues.length, 0);
+assert.notEqual(separateOccurrences.componentLedger[0].componentOccurrenceId,
+  separateOccurrences.componentLedger[1].componentOccurrenceId);
+assert.deepEqual(separateOccurrences.componentLedger.map(g => g.nodes.map(n => n.weightKg)), [[0, 15], [0, 20]]);
+
+const repeatedBranchName = sample.replace('</Root>', sample.slice('<Root>'.length, -'</Root>'.length) + '</Root>');
+const distinctBranches = applyXmlCiiSplitRigidWeightPropagation(repeatedBranchName, { sourceId: 'model-A' });
+assert.equal(distinctBranches.componentLedger.length, 2);
+assert.equal(distinctBranches.ownershipIssues.length, 0);
+assert.notEqual(distinctBranches.componentLedger[0].componentOccurrenceId,
+  distinctBranches.componentLedger[1].componentOccurrenceId);
+
+const scoped = applyXmlCiiSplitRigidWeightPropagation(sample, {
+  sourceId: 'model-A', snapshotDigest: 'snapshot-A', requireAllocation: true,
+});
+assert.equal(scoped.ownershipIssues.length, 1, 'single positive mass without owner proof must block strict approval');
+assert.equal(scoped.ownershipIssues[0].allocationType, 'UNKNOWN');
+const ownerId = scoped.componentLedger[0].componentOccurrenceId;
+const lumped = {
+  sourceId: 'model-A', snapshotDigest: 'snapshot-A',
+  allocationType: 'COMPONENT_LUMPED', componentMassKg: 15, ownerNodeOrdinal: 1,
+};
+const approvedLumped = applyXmlCiiSplitRigidWeightPropagation(sample, {
+  sourceId: 'model-A', snapshotDigest: 'snapshot-A', requireAllocation: true,
+  ownershipAllocations: { [ownerId]: lumped },
+});
+assert.equal(approvedLumped.ownershipIssues.length, 0);
+assert.equal(approvedLumped.componentLedger[0].status, 'VALIDATED');
+assert.equal(approvedLumped.componentLedger[0].allocationType, 'COMPONENT_LUMPED');
+
+const wrongOwner = applyXmlCiiSplitRigidWeightPropagation(sample, {
+  sourceId: 'model-A', snapshotDigest: 'snapshot-A', requireAllocation: true,
+  ownershipAllocations: { [ownerId]: { ...lumped, ownerNodeOrdinal: 0 } },
+});
+assert.match(wrongOwner.ownershipIssues[0].reason, /owner-or-nonowner-mismatch/);
+const stale = applyXmlCiiSplitRigidWeightPropagation(sample, {
+  sourceId: 'model-A', snapshotDigest: 'changed-snapshot', requireAllocation: true,
+  ownershipAllocations: { [ownerId]: lumped },
+});
+assert.match(stale.ownershipIssues[0].reason, /snapshot-mismatch/);
+const otherModel = applyXmlCiiSplitRigidWeightPropagation(sample, {
+  sourceId: 'model-B', snapshotDigest: 'snapshot-A', requireAllocation: true,
+  ownershipAllocations: { [ownerId]: lumped },
+});
+assert.equal(otherModel.ownershipIssues.length, 1, 'Mode A identity must isolate approvals by source ID');
+assert.equal(otherModel.ownershipIssues[0].allocationType, 'UNKNOWN');
+
+const distributedXml = sample.replace('<Weight>0</Weight>', '<Weight>5</Weight>');
+const distributedId = applyXmlCiiSplitRigidWeightPropagation(distributedXml, { sourceId: 'model-A' })
+  .componentLedger[0].componentOccurrenceId;
+const authorizedDistribution = applyXmlCiiSplitRigidWeightPropagation(distributedXml, {
+  sourceId: 'model-A', snapshotDigest: 'snapshot-A', requireAllocation: true,
+  ownershipAllocations: {
+    [distributedId]: {
+      sourceId: 'model-A', snapshotDigest: 'snapshot-A',
+      allocationType: 'SEGMENT_DISTRIBUTED', componentMassKg: 20,
+      childMassesKg: [{ nodeOrdinal: 0, massKg: 5 }, { nodeOrdinal: 1, massKg: 15 }],
+    },
+  },
+});
+assert.equal(authorizedDistribution.ownershipIssues.length, 0);
+assert.equal(authorizedDistribution.componentLedger[0].status, 'VALIDATED');
+const invalidDistribution = applyXmlCiiSplitRigidWeightPropagation(distributedXml, {
+  sourceId: 'model-A', snapshotDigest: 'snapshot-A', requireAllocation: true,
+  ownershipAllocations: {
+    [distributedId]: {
+      sourceId: 'model-A', snapshotDigest: 'snapshot-A',
+      allocationType: 'SEGMENT_DISTRIBUTED', componentMassKg: 25,
+      childMassesKg: [{ nodeOrdinal: 0, massKg: 5 }, { nodeOrdinal: 1, massKg: 15 }],
+    },
+  },
+});
+assert.match(invalidDistribution.ownershipIssues[0].reason, /mass-not-conserved/);
+const invalidWeight = applyXmlCiiSplitRigidWeightPropagation(sample.replace('<Weight>0</Weight>', '<Weight>bad</Weight>'));
+assert.match(invalidWeight.ownershipIssues[0].reason, /invalid-node-weight/);
+
 const missing = sample.replace('<Weight>0</Weight>', '');
 assert.equal(applyXmlCiiSplitRigidWeightPropagation(missing).xmlText, missing, 'missing weights must not silently receive copied mass');
 const zero = sample.replace('<Weight>15</Weight>', '<Weight>0</Weight>');
