@@ -52,9 +52,10 @@ class Step4EnrichedParityTests(unittest.TestCase):
         self.assertIn('12.1', str(result['classification']))
 
     def test_only_xml_formatting_change_still_requires_rca(self):
-        self.pr.write_text('<Root>\n<Value>12.0</Value></Root>', encoding='utf-8')
+        self.pr.write_text('<Root><Value>12.0</Value></Root>\n', encoding='utf-8')
         code, result = self.compare()
         self.assertEqual((code, result['status']), (1, 'DIFF_REQUIRES_RCA'))
+        self.assertEqual(result['classification']['kind'], 'SERIALIZATION_ONLY')
 
     def test_changed_config_hash_invalidates_comparison(self):
         meta = json.loads(self.candidate_manifest.read_text())
