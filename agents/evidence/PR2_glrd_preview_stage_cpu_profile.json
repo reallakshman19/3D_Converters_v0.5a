@@ -1,0 +1,55 @@
+{
+  "status": "PASS",
+  "scope": "Direct production Step4 stage timing; exact GLRD XML+staged and pinned historical full class/weight masters, reconstructed 22 exact matching line list entries, custom XML DOM, no browser/UI/rendering; does not replace enriched XML zero-diff gate",
+  "totalMs": 16973,
+  "stageTimes": {
+    "coreAndStrictLine": {
+      "ms": 7839,
+      "branches": 30,
+      "nodes": 269
+    },
+    "wall": {
+      "ms": 845,
+      "branches": 30,
+      "nodes": 269
+    },
+    "material": {
+      "ms": 304,
+      "branches": 30,
+      "nodes": 269
+    },
+    "rating": {
+      "ms": 7978,
+      "branches": 30,
+      "nodes": 269
+    }
+  },
+  "hotFunctions": {
+    "rankXmlCiiWeightCandidates": {
+      "calls": 538,
+      "ms": 10317,
+      "max": 40
+    },
+    "resolveBranchProcessData": {
+      "calls": 30,
+      "ms": 143,
+      "max": 11
+    },
+    "buildPipingClassIndex": {
+      "calls": 2,
+      "ms": 4154,
+      "max": 2136
+    },
+    "buildStagedDtxrIndex": {
+      "calls": 2,
+      "ms": 322,
+      "max": 185
+    }
+  },
+  "branchCount": 30,
+  "nodeRows": 269,
+  "stagedJsonBytes": 1816629,
+  "weightMasterRows": 1595,
+  "pipingClassMasterRows": 10699,
+  "lineListKeys": 22
+}
