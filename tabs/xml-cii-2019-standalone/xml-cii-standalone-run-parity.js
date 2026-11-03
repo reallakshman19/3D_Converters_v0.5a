@@ -118,7 +118,6 @@ async function applyStandaloneProcessParity(xmlText, config, stagedJsonText, dia
   if (!result.branchRows.length) return result;
 
   const { weights: nodeWeights, reviewProposals } = mappedNodeWeights(result.nodeRows, config);
-  result.reviewProposals = reviewProposals;
   const byBranch = new Map(result.branchRows.map((row) => [text(row.branchName), row]));
   const document = new DOMParser().parseFromString(xmlText, 'application/xml');
   if (document.getElementsByTagName('parsererror').length) throw new Error('Standalone run parity could not parse the enriched XML.');
@@ -150,7 +149,9 @@ async function applyStandaloneProcessParity(xmlText, config, stagedJsonText, dia
       });
     }
 
-    for (const node of childrenByName(branch, 'Node')) {
+    const branchNodes = childrenByName(branch, 'Node');
+    for (let nodeIndex = 0; nodeIndex < branchNodes.length; nodeIndex += 1) {
+      const node = branchNodes[nodeIndex];
       const nodeNumber = childText(node, 'NodeNumber');
       const nodeWrites = [
         { name: 'PipingClass', field: 'pipingClass', value: row.pipingClass, kind: 'text' },
@@ -172,6 +173,20 @@ async function applyStandaloneProcessParity(xmlText, config, stagedJsonText, dia
 
       const mapped = nodeWeights.get(`${branchName}|${nodeNumber}`);
       const existingWeight = numeric(childText(node, 'Weight'));
+      if (existingWeight === null || existingWeight === 0) {
+        const pending = reviewProposals.find((proposal) =>
+          text(proposal.branchName) === branchName
+          && text(proposal.toNode) === nodeNumber
+          && text(proposal.componentRefNo).replace(/^=/, '') === childText(node, 'ComponentRefNo').replace(/^=/, '')
+          && text(proposal.endpoint) === childText(node, 'Endpoint'));
+        if (pending && nodeIndex > 0) {
+          result.reviewProposals.push({
+            ...pending,
+            fromNode: childText(branchNodes[nodeIndex - 1], 'NodeNumber'),
+            currentWeightKg: 0,
+          });
+        }
+      }
       if (mapped !== undefined && (existingWeight === null || existingWeight === 0) && setChildText(document, node, 'Weight', mapped)) {
         result.appliedFields += 1;
         recordExpected(result.expectedEntries, {
