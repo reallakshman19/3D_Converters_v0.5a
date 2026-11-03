@@ -1,0 +1,94 @@
+name: GLRD real-browser baseline Preview and enriched XML
+on:
+  push:
+    branches:
+      - test/glrd-step4-baseline-capture-20261103
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  genuine-browser-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate harness source before capture
+        run: |
+          node --check tests/glrd_phase4_browser_export_capture.mjs
+          python3 -m py_compile tests/glrd_build_reference_browser_config.py
+          python3 -m pip install --quiet openpyxl
+      - name: Checkout untouched immutable main baseline
+        run: |
+          mkdir -p /tmp/glrd/input /tmp/glrd/output
+          git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/product
+          git -C /tmp/glrd/product checkout --detach a3b3d7e329686ceff419d2399ee153986bcab23f
+          test "$(git -C /tmp/glrd/product rev-parse HEAD)" = "a3b3d7e329686ceff419d2399ee153986bcab23f"
+          test -z "$(git -C /tmp/glrd/product status --porcelain --untracked-files=no)"
+      - name: Fetch and attest pinned GLRD source files and master data
+        run: |
+          set -euo pipefail
+          SRC="https://raw.githubusercontent.com/reallakshman19/3D_Converters/3377b7f4baeeee5851e72dcc414d6c4a93f5a933/Benchmarks/XML-CII-2019/revamped"
+          MST="https://raw.githubusercontent.com/reallakshman19/3D_Converters/25db94769994751bb0fb6e6d83a578efd9ac8162/docs/docs/Masters"
+          cd /tmp/glrd/input
+          curl --retry 4 -fLsS "$SRC/GLRD-1000-PSI-02.xml" -o source.xml
+          curl --retry 4 -fLsS "$SRC/STF_2026Nov03-0839_managed_stage.json" -o staged.json
+          curl --retry 4 -fLsS "$SRC/STD-00-PX-4338-01001-0001-02.xlsx" -o linelist.xlsx
+          curl --retry 4 -fLsS "$MST/Piping_class_master.json" -o piping-class.json
+          curl --retry 4 -fLsS "$MST/wtValveweights.json" -o weight.json
+          curl --retry 4 -fLsS "$MST/PCF_MAT_MAP.TXT" -o material-map.txt
+          test "$(git hash-object source.xml)" = "8c60c9e58995172d48a9d1ebfa23569db5659f06"
+          test "$(git hash-object staged.json)" = "c611f53d6571cae7df51d9ac817a723be493b952"
+          test "$(git hash-object linelist.xlsx)" = "717b41959c9ab47811f47ea4270125f5f257e3c2"
+          test "$(git hash-object piping-class.json)" = "af218bf3692acd66c93e190635633e14ccfb30ac"
+          test "$(git hash-object weight.json)" = "f969d32dfea1bf03eb7dc310d9f3becacad5a4d1"
+          test "$(git hash-object material-map.txt)" = "371ce3a1bd854228650847d8f511e98baa5dc5f3"
+          sha256sum source.xml staged.json linelist.xlsx piping-class.json weight.json material-map.txt | tee /tmp/glrd/output/pinned-input-sha256.txt
+      - name: Prepare fixed browser-effective config from referenced masters
+        run: |
+          node --input-type=module -e "import {defaultXmlCii2019SupportConfigJson as f} from '/tmp/glrd/product/tabs/xml-cii-2019-standalone/xml-cii-standalone-default-config.js'; process.stdout.write(f());" > /tmp/glrd/input/defaults.json
+          python3 tests/glrd_build_reference_browser_config.py \
+            --line-list /tmp/glrd/input/linelist.xlsx \
+            --piping-class /tmp/glrd/input/piping-class.json \
+            --weight /tmp/glrd/input/weight.json \
+            --material-map /tmp/glrd/input/material-map.txt \
+            --defaults /tmp/glrd/input/defaults.json \
+            --out /tmp/glrd/input/config.json \
+            --report /tmp/glrd/output/config-provenance.json
+          sha256sum /tmp/glrd/input/config.json | tee /tmp/glrd/output/effective-config-sha256.txt
+      - name: Capture REAL Chromium Preview and production downstream enriched XML
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$CHROME_BIN"
+          "$CHROME_BIN" --version
+          node tests/glrd_phase4_browser_export_capture.mjs \
+            --root /tmp/glrd/product \
+            --xml /tmp/glrd/input/source.xml \
+            --staged /tmp/glrd/input/staged.json \
+            --config /tmp/glrd/input/config.json \
+            --linelist /tmp/glrd/input/linelist.xlsx \
+            --piping-class /tmp/glrd/input/piping-class.json \
+            --weight /tmp/glrd/input/weight.json \
+            --material-map /tmp/glrd/input/material-map.txt \
+            --out /tmp/glrd/output \
+            --label baseline \
+            --expected-sha a3b3d7e329686ceff419d2399ee153986bcab23f \
+            --chromium "$CHROME_BIN"
+      - name: Independently verify baseline XML is nonempty and parsable
+        run: |
+          python3 -c "import pathlib,xml.etree.ElementTree as ET; p=pathlib.Path('/tmp/glrd/output/baseline-enriched.xml');assert p.stat().st_size>1000;ET.parse(p);print('Valid baseline XML bytes',p.stat().st_size)"
+      - name: Upload baseline and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glrd-browser-baseline-main-a3b3d7e
+          path: /tmp/glrd/output/
+          if-no-files-found: warn
+          retention-days: 14
