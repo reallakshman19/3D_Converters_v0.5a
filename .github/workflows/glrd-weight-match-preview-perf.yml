@@ -75,6 +75,12 @@ jobs:
       - name: Weight Match and RIGID regression suite
         run: |
           set -euo pipefail
+          node --check converters/xml-cii2019-core/rigid-weight-snapshot.js
+          node --check tabs/xml-cii-2019-standalone/xml-cii-final-rigid-weight-review-gate.js
+          node --check tabs/xml-cii-2019-standalone/xml-cii-workflow-service.js
+          node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-output-empirical-review.js
+          node --check tabs/xml-cii-2019-standalone/xml-cii-workflow-ui-adapter.js
+          node tests/xml-cii-rigid-ownership-snapshot.test.mjs
           node --check converters/xml-cii2019-core/split-rigid-weight-propagation.js
           node --check tabs/model-converters/converters/xmltocii2019_runner.js
           node tests/xml-cii-final-weight-audit.test.mjs
