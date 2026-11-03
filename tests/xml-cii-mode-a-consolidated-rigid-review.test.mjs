@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   buildModeAPreviewFillPlan,
   modeAPreviewFillGroupKey,
@@ -58,5 +59,14 @@ assert.equal(configA.overrides.rating['/SAME/B1::100'], '900');
 assert.equal(configB.overrides.rating['/SAME/B1::100'], '600');
 assert.equal(configA.overrides.other.keep, 1, 'unrelated source-local config must be preserved');
 assert.deepEqual(JSON.parse(updated.supportConfigJson), configA, 'root active-source config must align with reviewed active XML before Mode A sync');
+
+for (const path of [
+  '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-rigid-review-mode-a.js',
+  '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-run-workflow.js',
+  '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-run-workflow-atta-default.js',
+]) {
+  const source = readFileSync(new URL(path, import.meta.url), 'utf8');
+  assert.match(source, /Manual Weight \(kg\)/, `${path} must label manual mass inputs in kg`);
+}
 
 console.log('xml-cii Mode A consolidated rigid review tests: PASS');
