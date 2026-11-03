@@ -35,7 +35,7 @@ assert.ok(audit.allRows[4].reviewFlags.includes('RIGID_OWNER_WEIGHT_NEGATIVE'));
 
 const gate = buildStandaloneFinalRigidReview({xmlText:xml,nodeRows:[],reviewProposals:[]}, {}, {includeAllPositiveMasses:true});
 assert.equal(gate.issues.length, 5);
-assert.deepEqual(gate.issues.map(x=>x.ownerWeightState), ['ZERO','POSITIVE','MISSING','INVALID','NEGATIVE']);
+assert.deepEqual(gate.issues.map(x=>x.ownerWeightState), ['POSITIVE','ZERO','MISSING','INVALID','NEGATIVE']);
 const markup = finalRigidWeightReviewMarkup(gate.issues, {manualInspection:true});
 for(const phrase of ['0 kg (zero / non-owner not yet established)', 'MISSING', 'INVALID', 'NEGATIVE (blocked)']) {
   assert.ok(markup.includes(phrase), 'missing explicit edge condition in all-owner UI: '+phrase);
