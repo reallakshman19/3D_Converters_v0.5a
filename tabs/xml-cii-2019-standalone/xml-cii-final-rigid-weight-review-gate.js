@@ -1,6 +1,7 @@
 import { auditXmlCiiRigidWeightsForExport } from '../../converters/xml-cii2019-core/rigid-weight-export-audit.js';
 import { validateXmlCiiFinalRigidWeightAudit } from '../../converters/xml-cii2019-core/rigid-weight-final-validation.js';
 import { applyXmlCiiSplitRigidWeightPropagation } from '../../converters/xml-cii2019-core/split-rigid-weight-propagation.js';
+import { digestRigidOwnershipSnapshot } from '../../converters/xml-cii2019-core/rigid-weight-snapshot.js';
 import {
   applyXmlCiiRigidWeightOverrides,
   collectXmlCiiWeightMatchRows,
@@ -138,6 +139,16 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   const preapplied = Object.keys(reviewOverrides).length
     ? applyXmlCiiRigidWeightOverrides(parity.xmlText, reviewOverrides)
     : { xmlText: parity.xmlText, appliedCount: 0 };
+  const snapshotDigest = await digestRigidOwnershipSnapshot({
+    sourceId: job?.sourceId || job?.sourceName || '',
+    sourceName: job?.sourceName || '',
+    sourceText: job?.sourceText || '',
+    stagedJsonText: job?.stagedJsonText || '',
+    supportConfigJson: job?.supportConfigJson || '{}',
+    branchSelection: job?.branchSelection || null,
+    options: job?.options || {},
+    preparedXmlText: preapplied.xmlText,
+  });
   const gate = buildStandaloneFinalRigidReview(
     { ...parity, xmlText: preapplied.xmlText },
     config,
@@ -145,7 +156,7 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
       kgToNewton: job?.options?.kgToNewton !== false,
       stagedJsonText: job?.stagedJsonText || '',
       sourceId: job?.sourceId || job?.sourceName || '',
-      snapshotDigest: job?.verifiedWeightSnapshotDigest || '',
+      snapshotDigest,
     },
   );
   // Empirical plausibility never overrides a split component with multiple
@@ -161,7 +172,7 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
       ...gate,
     };
   }
-  if (!gate.issues.length) return { ok: true, xmlText: gate.xmlText, audit: gate.audit, splitCustody: gate.splitCustody, reviewedRows: [], issues: [] };
+  if (!gate.issues.length) return { ok: true, xmlText: gate.xmlText, audit: gate.audit, splitCustody: gate.splitCustody, snapshotDigest, reviewedRows: [], issues: [] };
   const identification = gate.issues.map((item) => `${item.fromNode || '?'} → ${item.toNode}: ${item.reviewFlags.join('/')}`).join('; ');
   if (typeof runtime.reviewFinalRigidWeights !== 'function') {
     return { ok: false, error: `Final rigid weight review required before CII export: ${identification}. No review dialog is connected.`, ...gate };
@@ -187,7 +198,7 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   }
   const afterReviewCustody = applyXmlCiiSplitRigidWeightPropagation(applied.xmlText, {
     sourceId: job?.sourceId || job?.sourceName || '',
-    snapshotDigest: job?.verifiedWeightSnapshotDigest || '',
+    snapshotDigest,
     ownershipAllocations: config?.rigidOwnership?.allocations || {},
     requireAllocation: config?.rigidOwnership?.requireAllocation === true,
   });
@@ -207,5 +218,5 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   if (typeof runtime.onFinalRigidWeightsApplied === 'function') {
     await runtime.onFinalRigidWeightsApplied({ weightsByKey: permitted, reviewedRows });
   }
-  return { ok: true, xmlText: applied.xmlText, audit: gate.audit, splitCustody: afterReviewCustody, reviewedRows, issues: gate.issues };
+  return { ok: true, xmlText: applied.xmlText, audit: gate.audit, splitCustody: afterReviewCustody, snapshotDigest, reviewedRows, issues: gate.issues };
 }
