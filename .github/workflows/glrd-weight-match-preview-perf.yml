@@ -72,6 +72,51 @@ jobs:
           assert report['changedRows'], 'legacy vs corrected XML must differ'
           assert report['correctedAppliedCount']==0
           PY
+      - name: Convert both controlled real GLRD split XMLs through actual Python CII and reconcile emitted weight
+        run: |
+          set -euo pipefail
+          python3 converters/scripts/xml_to_cii2019_runtime_custody.py \
+            --input /tmp/glrd-preview/results/GLRD-weight-split-before-enriched.xml \
+            --output /tmp/glrd-preview/results/GLRD-weight-split-before.cii \
+            --weight-scale 10 --coords-mode first --split-condensed-valve-flange
+          python3 converters/scripts/xml_to_cii2019_runtime_custody.py \
+            --input /tmp/glrd-preview/results/GLRD-weight-split-after-enriched.xml \
+            --output /tmp/glrd-preview/results/GLRD-weight-split-after.cii \
+            --weight-scale 10 --coords-mode first --split-condensed-valve-flange
+          python3 - <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+          sys.path.insert(0, 'converters/scripts')
+          import xml_to_cii2019 as base
+          import xml_to_cii2019_patched as patched
+          out=Path('/tmp/glrd-preview/results')
+          def cii_masses(path):
+              data=path.read_text()
+              section=data.split('#$ RIGID\n',1)[1].split('#$ ',1)[0]
+              return [float(line.split()[0]) for line in section.splitlines() if line.split()]
+          pre=out/'GLRD-weight-split-before-enriched.xml'
+          post=out/'GLRD-weight-split-after-enriched.xml'
+          before=out/'GLRD-weight-split-before.cii'
+          after=out/'GLRD-weight-split-after.cii'
+          massBefore=cii_masses(before)
+          massAfter=cii_masses(after)
+          doc=base._parse_xml_document(post)
+          model=patched._build_conversion_model(doc, {}, {}, {})
+          matches=[edge for edge in model.rigid_edges if edge.to_node.node_number==460]
+          assert len(matches)==1 and abs(base._rigid_weight_for_edge(matches[0])-15)<1e-8, 'real GLRD node 460 must emit 15 kg'
+          assert any(abs(value-150)<1e-8 for value in massAfter), 'approved 15 kg must appear as 150 N in actual CII RIGID payload'
+          report={
+            'source':'real GLRD prepared XML, controlled node 460 owner=15 kg',
+            'legacyCiiSha256':hashlib.sha256(before.read_bytes()).hexdigest(),
+            'fixedCiiSha256':hashlib.sha256(after.read_bytes()).hexdigest(),
+            'ciiIdentical':before.read_bytes()==after.read_bytes(),
+            'legacyPositiveRigidMassesN':[v for v in massBefore if v>0],
+            'correctedPositiveRigidMassesN':[v for v in massAfter if v>0],
+            'ownerEdge':{'fromNode':matches[0].from_node.node_number,'toNode':460,'massKg':15,'convertedN':150},
+          }
+          (out/'GLRD-weight-split-Python-CII-reconciliation.json').write_text(json.dumps(report,indent=2)+'\n')
+          print('GLRD_SPLIT_PYTHON_CII',json.dumps(report))
+          PY
       - name: Weight Match and RIGID regression suite
         run: |
           set -euo pipefail
