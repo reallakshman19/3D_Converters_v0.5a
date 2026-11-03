@@ -150,6 +150,8 @@ const EXPRESSION=String.raw`(async()=>{
     await pause(1600);
     result.afterSourceImportText=document.querySelector('.app-content .xml-cii-main-workspace')?.innerText?.slice(0,1250)||'';
     result.afterSourceInput=(document.querySelector('.app-content input[data-field="source-file"]')?.files?.[0]?.name||'');
+    result.phaseButtonsAfterSource=[...document.querySelectorAll('.app-content [data-phase]')].map(x=>x.dataset.phase);
+    result.shellAfterSource=!!document.querySelector('.app-content .xml-cii-standalone-root');
     result.sourceImportAttempted=true;
   }else{
     result.sourceImportAttempted=false;
@@ -161,7 +163,10 @@ const EXPRESSION=String.raw`(async()=>{
     result.uiSteps.push('clicked real phase 3 Resolver / JSON Trace');
     await pause(700);
     result.jsonTraceControls=[...document.querySelectorAll('.app-content input[type=file]')].map(el=>({field:el.dataset.field,accept:el.accept}));
-    const stagedInput=document.querySelector('.app-content input[type=file][data-field="staged-json-file"]');
+    result.phaseButtonsAfterJsonTrace=[...document.querySelectorAll('.app-content [data-phase]')].map(x=>x.dataset.phase);
+    result.shellAfterJsonTrace=!!document.querySelector('.app-content .xml-cii-standalone-root');
+    result.jsonTracePageText=document.querySelector('.app-content .xml-cii-main-workspace')?.innerText?.slice(0,1900)||'';
+    const stagedInput=document.querySelector('.app-content input[type=file][data-mode-a-staged-json-all],.app-content input[type=file][data-field="staged-json-file"]');
     if(stagedInput){
       const response=await fetch('/__glrd/stage.json',{cache:'no-store'});
       if(response.ok){
@@ -172,10 +177,13 @@ const EXPRESSION=String.raw`(async()=>{
         result.uiSteps.push('imported pinned managed stage JSON via real file input');
         await pause(800);
         result.stagedImportAttempted=true;
+        result.stagedAfterImportText=document.querySelector('.app-content .xml-cii-main-workspace')?.innerText?.slice(0,600)||'';
+        result.phaseButtonsAfterStaged=[...document.querySelectorAll('.app-content [data-phase]')].map(x=>x.dataset.phase);
       }else{result.stagedImportBlocker='Staged fixture HTTP '+response.status;}
     }else{result.stagedImportBlocker='No staged-json-file input in active phase';}
   }
-  const preview=document.querySelector('.app-content [data-phase="preview"]');
+  const preview=await waitFor(()=>document.querySelector('.app-content [data-phase="preview"]'),7000);
+  result.phaseButtonsBeforePreview=[...document.querySelectorAll('.app-content [data-phase]')].map(x=>x.dataset.phase);
   if(preview){
     preview.click();
     result.uiSteps.push('clicked real phase 4 Preview');
@@ -184,6 +192,9 @@ const EXPRESSION=String.raw`(async()=>{
     result.previewButtonLabels=[...document.querySelectorAll('.app-content button')].map(x=>x.innerText.trim()).filter(x=>/Preview|Build|Map|Review|Refresh/i.test(x)).slice(0,32);
     result.previewHostCount=document.querySelectorAll('.app-content #mc-preview-table-host').length;
     result.phasePreviewReached=true;
+  }else {
+    result.previewNavigationBlocker='Preview phase button not present after file and staged import';
+    result.finalAppText=(document.querySelector('.app-content')?.innerText||'').slice(0,1650);
   }
   result.status='ENTRYPOINT_AND_PHASES_OBSERVED';
   result.finalActivePhase=document.querySelector('.app-content [data-active-phase]')?.dataset.activePhase||'';
