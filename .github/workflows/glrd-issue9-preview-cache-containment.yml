@@ -1,4 +1,4 @@
-name: Issue 9 fail-closed Preview UI cache: Chromium and enriched-XML parity
+name: 'Issue 9 fail-closed Preview UI cache: Chromium and enriched-XML parity'
 on:
   push:
     branches:
@@ -77,7 +77,7 @@ jobs:
             --out /tmp/glrd/inputs/config.json \
             --report /tmp/glrd/outputs/config-provenance.json
           test "$(sha256sum /tmp/glrd/inputs/config.json | cut -d ' ' -f1)" = "292246ab4c97cd388265c70ceb3a613dc8d124debdaffd3ef8b2cf25cb049b05"
-      - name: Browser DOM test: old cache ignored, idle safe, actual button re-renders correct rating
+      - name: 'Browser DOM test: old cache ignored, idle safe, actual button re-renders correct rating'
         run: |
           CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
           test -n "$CHROME_BIN"
