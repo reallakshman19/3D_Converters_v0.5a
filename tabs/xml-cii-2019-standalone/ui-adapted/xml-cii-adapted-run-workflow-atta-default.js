@@ -76,7 +76,7 @@ function rigidReviewMarkup(rows) {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;border-top:1px solid #253a55;padding-top:16px;">
       <button type="button" data-rigid-review-refresh style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:8px 16px;font-size:12px;">Refresh Suggestions</button>
       <div style="display:flex;gap:12px;">
-        <button type="button" data-rigid-review-fill-best style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:8px 16px;font-size:12px;">Use All Suggestions</button>
+        <button type="button" data-rigid-review-fill-best style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:8px 16px;font-size:12px;">Use Empirically Validated Suggestions</button>
         <button type="button" data-rigid-review-skip style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:8px 16px;font-size:12px;">Skip Review</button>
         <button type="button" data-rigid-review-apply style="cursor:pointer;background:#1e4ed8;border:none;color:#fff;border-radius:6px;padding:8px 16px;font-size:12px;font-weight:700;">Apply Weights and Continue</button>
       </div>
@@ -163,7 +163,7 @@ function bindRigidReviewPopup(overlay, rows, resolve, stateRef, config) {
       const safe = qualifiedXmlCiiRigidAutoWeightCandidate(rows[index]);
       if (input && safe) input.value = String(safe.weightKg);
     });
-    setStatus('Filled only qualified 60–100% direct master suggestions. Inferred, short-length, and low-confidence entries remain empty.', false);
+    setStatus('Filled only empirically validated suggestions (A1/A2 within ±50%); unvalidated or deviant weights still require manual review.', false);
   });
   overlay.querySelector('[data-rigid-review-cancel]')?.addEventListener('click', () => finish({ cancelled: true, skipped: false, weightsByKey: {} }));
   overlay.querySelector('[data-rigid-review-skip]')?.addEventListener('click', () => finish({ cancelled: false, skipped: true, weightsByKey: {} }));
