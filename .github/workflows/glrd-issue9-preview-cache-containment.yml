@@ -1,0 +1,165 @@
+name: Issue 9 fail-closed Preview UI cache: Chromium and enriched-XML parity
+on:
+  push:
+    branches:
+      - fix/xml-cii-preview-cache-fail-closed-20261104
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  renderer-containment-and-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify one-production-file containment scope and dependencies
+        run: |
+          set -euo pipefail
+          node --check tests/glrd_issue9_cache_containment_browser.mjs
+          git merge-base --is-ancestor 814157b162b981c9876f564f3cb0474435c8c37e HEAD
+          git diff --name-only 814157b162b981c9876f564f3cb0474435c8c37e HEAD
+          git diff --name-only 814157b162b981c9876f564f3cb0474435c8c37e HEAD | while read -r file; do
+            case "$file" in
+              tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer.js|tests/glrd_issue9_cache_containment_browser.mjs|.github/workflows/glrd-issue9-preview-cache-containment.yml) ;;
+              *) echo "Unexpected file changed: $file"; exit 1;;
+            esac
+          done
+          python3 -m pip install --quiet openpyxl
+      - name: Checkout unchanged Phase 1 and verified capture harness commits
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/glrd/inputs /tmp/glrd/outputs
+          git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/phase1
+          git -C /tmp/glrd/phase1 checkout --detach 814157b162b981c9876f564f3cb0474435c8c37e
+          git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/capture
+          git -C /tmp/glrd/capture checkout --detach 19efc37c96b314e4e94194e46d348743207fea6c
+          test "$(git -C /tmp/glrd/phase1 rev-parse HEAD)" = "814157b162b981c9876f564f3cb0474435c8c37e"
+          test "$(git -C /tmp/glrd/capture rev-parse HEAD)" = "19efc37c96b314e4e94194e46d348743207fea6c"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          test -z "$(git -C /tmp/glrd/phase1 status --porcelain --untracked-files=no)"
+      - name: Fetch and verify immutable GLRD original references
+        run: |
+          set -euo pipefail
+          SRC="https://raw.githubusercontent.com/reallakshman19/3D_Converters/3377b7f4baeeee5851e72dcc414d6c4a93f5a933/Benchmarks/XML-CII-2019/revamped"
+          MST="https://raw.githubusercontent.com/reallakshman19/3D_Converters/25db94769994751bb0fb6e6d83a578efd9ac8162/docs/docs/Masters"
+          cd /tmp/glrd/inputs
+          curl --retry 4 -fLsS "$SRC/GLRD-1000-PSI-02.xml" -o source.xml
+          curl --retry 4 -fLsS "$SRC/STF_2026Nov03-0839_managed_stage.json" -o staged.json
+          curl --retry 4 -fLsS "$SRC/STD-00-PX-4338-01001-0001-02.xlsx" -o linelist.xlsx
+          curl --retry 4 -fLsS "$MST/Piping_class_master.json" -o piping-class.json
+          curl --retry 4 -fLsS "$MST/wtValveweights.json" -o weight.json
+          curl --retry 4 -fLsS "$MST/PCF_MAT_MAP.TXT" -o material-map.txt
+          test "$(git hash-object source.xml)" = "8c60c9e58995172d48a9d1ebfa23569db5659f06"
+          test "$(git hash-object staged.json)" = "c611f53d6571cae7df51d9ac817a723be493b952"
+          test "$(git hash-object linelist.xlsx)" = "717b41959c9ab47811f47ea4270125f5f257e3c2"
+          test "$(git hash-object piping-class.json)" = "af218bf3692acd66c93e190635633e14ccfb30ac"
+          test "$(git hash-object weight.json)" = "f969d32dfea1bf03eb7dc310d9f3becacad5a4d1"
+          test "$(git hash-object material-map.txt)" = "371ce3a1bd854228650847d8f511e98baa5dc5f3"
+          sha256sum source.xml staged.json linelist.xlsx piping-class.json weight.json material-map.txt > /tmp/glrd/outputs/input-custody-sha256.txt
+      - name: Construct and fingerprint same effective config for both revisions
+        run: |
+          node --input-type=module -e "import {defaultXmlCii2019SupportConfigJson as f} from '/tmp/glrd/phase1/tabs/xml-cii-2019-standalone/xml-cii-standalone-default-config.js'; process.stdout.write(f());" > /tmp/glrd/inputs/defaults.json
+          python3 /tmp/glrd/capture/tests/glrd_build_reference_browser_config.py \
+            --line-list /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --defaults /tmp/glrd/inputs/defaults.json \
+            --out /tmp/glrd/inputs/config.json \
+            --report /tmp/glrd/outputs/config-provenance.json
+          test "$(sha256sum /tmp/glrd/inputs/config.json | cut -d ' ' -f1)" = "292246ab4c97cd388265c70ceb3a613dc8d124debdaffd3ef8b2cf25cb049b05"
+      - name: Browser DOM test: old cache ignored, idle safe, actual button re-renders correct rating
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$CHROME_BIN"
+          "$CHROME_BIN" --version | tee /tmp/glrd/outputs/chromium-version.txt
+          node tests/glrd_issue9_cache_containment_browser.mjs \
+            --root "$PWD" --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/outputs --label optimized --audit-mode baseline \
+            --expected-sha "$GITHUB_SHA" --chromium "$CHROME_BIN"
+      - name: Capture unchanged Phase 1 browser Preview and actual enriched XML
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          node /tmp/glrd/capture/tests/glrd_phase4_browser_export_capture.mjs \
+            --root /tmp/glrd/phase1 --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/outputs --label baseline \
+            --expected-sha 814157b162b981c9876f564f3cb0474435c8c37e \
+            --chromium "$CHROME_BIN"
+      - name: Capture containment candidate browser Preview and actual enriched XML
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          node /tmp/glrd/capture/tests/glrd_phase4_browser_export_capture.mjs \
+            --root "$PWD" --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/outputs --label optimized \
+            --expected-sha "$GITHUB_SHA" --chromium "$CHROME_BIN"
+      - name: Fail closed on any Preview or enriched-XML byte difference
+        run: |
+          set -euo pipefail
+          cmp /tmp/glrd/outputs/baseline-preview.json /tmp/glrd/outputs/optimized-preview.json
+          python3 /tmp/glrd/phase1/tests/glrd_phase4_enriched_parity.py \
+            --before /tmp/glrd/outputs/baseline-enriched.xml \
+            --after /tmp/glrd/outputs/optimized-enriched.xml \
+            --before-manifest /tmp/glrd/outputs/baseline-manifest.json \
+            --after-manifest /tmp/glrd/outputs/optimized-manifest.json \
+            --report /tmp/glrd/outputs/xml-parity-diff.json
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json
+          d=Path('/tmp/glrd/outputs')
+          source=(d/'baseline-preview.json').read_bytes()
+          target=(d/'optimized-preview.json').read_bytes()
+          baseXml=(d/'baseline-enriched.xml').read_bytes()
+          newXml=(d/'optimized-enriched.xml').read_bytes()
+          sha=lambda b:hashlib.sha256(b).hexdigest()
+          assert source==target and baseXml==newXml
+          assert sha(source)=='76bedf169f0a6e00e42539e634735d4736f86f205ca0c7be9da145e4c9f0adec'
+          assert sha(baseXml)=='f00da45caf73b15e930e4c91d068d8d1bebd1b9ad1452ad0d7b204af9c3a8aa2'
+          report={'status':'PASS','scope':'direct Chromium production Preview and Run modules; not full UI export',
+            'previewBytes':len(source),'previewSha256':sha(source),'previewByteDiff':0,
+            'enrichedXmlBytes':len(baseXml),'enrichedXmlSha256':sha(baseXml),'enrichedXmlByteDiff':0}
+          (d/'verified-byte-diff.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          PY
+      - name: Native strict-line, wall, error and XML-gate regressions
+        run: |
+          set -euo pipefail
+          GLRD_SOURCE_XML=/tmp/glrd/inputs/source.xml \
+          GLRD_STAGE_FILE=/tmp/glrd/inputs/staged.json \
+          node --test \
+            tests/xml-cii-preview-strict-line-authority.test.mjs \
+            tests/xml-cii-preview-wall-authority-parity.test.mjs \
+            tests/xml-cii-preview-wall-evidence-index.test.mjs \
+            tests/xml-cii-bore-wall-authority.test.mjs
+          python3 tests/test_glrd_phase4_enriched_parity.py -v
+      - name: Preserve all results and errors
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glrd-issue9-cache-containment-browser-and-xml-parity
+          path: /tmp/glrd/outputs/
+          if-no-files-found: warn
+          retention-days: 14
