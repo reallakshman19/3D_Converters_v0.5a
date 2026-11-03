@@ -60,7 +60,7 @@ def run(before, after, out):
         b = json.loads((before / f"{kind}-report.json").read_text())
         a = json.loads((after / f"{kind}-report.json").read_text())
         assert b["enrichedSha256"] == a["enrichedSha256"], f"{kind}: enriched XML drift"
-        for key in ("edgeCount", "rigidEdgeCount", "restraintCount", "node460Edges"):
+        for key in ("edgeCount", "rigidEdgeCount", "restraintCount", "node460Edges", "skippedRestraintNodeNumbers", "stagedFlange460"):
             assert b[key] == a[key], f"{kind}: model drift in {key}"
         before_sections, after_sections = records(before / f"{kind}.cii"), records(after / f"{kind}.cii")
         assert before_sections.keys() == after_sections.keys(), f"{kind}: sections differ"
@@ -109,6 +109,8 @@ def run(before, after, out):
             "node460CiiWeightN": matches[0]["ciiMassForceN"],
             "ciiDiffLines": len(cii_diff),
             "reconstructedCiiNodes": len(reconstructed_after),
+            "preExistingSkippedRestraintWarnings": len(a["skippedRestraintNodeNumbers"]),
+            "stagedFlangeDtxr": (a["stagedFlange460"] or {}).get("dtxr", ""),
         }
     raw_sections = records(after / "raw.cii")
     reviewed_sections = records(after / "reviewed.cii")

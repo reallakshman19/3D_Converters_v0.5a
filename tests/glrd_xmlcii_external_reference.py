@@ -2,6 +2,9 @@
 """External GLRD reference replay: records exact Python conversion input and CII output."""
 from __future__ import annotations
 import argparse
+import contextlib
+import io
+import re
 import hashlib
 import json
 import shutil
@@ -107,6 +110,23 @@ def linelist_config(workbook):
                          "insThk": "Insulation Thickness"}}}
 
 
+def staged_flange_record(path, ref):
+    if path is None or not path.exists() or not path.stat().st_size:
+        return None
+    root = json.loads(path.read_text(encoding="utf-8-sig"))
+    stack = [root]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, dict):
+            attrs = item.get("attributes")
+            if item.get("type") == "FLAN" and isinstance(attrs, dict) and attrs.get("NAME") == ref:
+                return {"ref": ref, "dtxr": attrs.get("DTXR", ""), "apos": attrs.get("APOS")}
+            stack.extend(v for k, v in item.items() if k == "children")
+    raise AssertionError(f"No staged FLAN with ComponentRefNo {ref}")
+
+
 def run_one(source, target, kind, out, scale, staged, config):
     out.mkdir(parents=True, exist_ok=True)
     input_path = source
@@ -148,12 +168,20 @@ def run_one(source, target, kind, out, scale, staged, config):
         sys.argv.extend(["--staged-json", str(staged)])
     if config:
         sys.argv.extend(["--support-config-json", json.dumps(config)])
+    diagnostic_buffer = io.StringIO()
     try:
-        runtime.main()
+        with contextlib.redirect_stderr(diagnostic_buffer):
+            runtime.main()
     finally:
         sys.argv = saved_argv
         base._parse_xml_document = original_parse
         base._build_cii_text = original_write
+    warning_text = diagnostic_buffer.getvalue()
+    sys.stderr.write(warning_text)
+    captured["skippedRestraintNodeNumbers"] = [
+        int(match) for match in re.findall(r"WARNING: Unable to assign restraint for NodeNumber (\\d+); restraint skipped", warning_text)
+    ]
+    captured["stagedFlange460"] = staged_flange_record(staged, "=134234934/27950")
     captured.update({
         "kind": kind,
         "inputSha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),
