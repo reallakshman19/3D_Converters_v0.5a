@@ -1,4 +1,11 @@
 import { collectXmlCiiWeightMatchRows } from '../../../../converters/xml-cii2019-core/weight-match-model.js?v=20260626-weight-review-2';
+import { createEmpiricalWeightValidator } from '../../../../converters/empirical-weight/empirical-weight-validation.js';
+import {
+  qualifiedXmlCiiRigidAutoWeightCandidate,
+  xmlCiiWeightSuggestionConfidence,
+  XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT,
+  XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT,
+} from '../../../../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
 import { applyXmlCiiFlangeWeightFallbackToIssue } from '../../../../converters/xml-cii2019-core/flange-weight-fallback.js?v=20260626-special-factor-guard-1';
 import { applyXmlCiiStagedGeometryAuthority } from '../../../../converters/xml-cii2019-core/staged-geometry-authority.js?v=20260625-staged-geometry-1';
 import {
@@ -260,7 +267,20 @@ function factorRuleRowsHtml(config) { return specialValveFactorRows(config).map(
 function editableRuleTable(title, headers, rowsHtml, helpText) { return `<section style="border:1px solid #253a55;border-radius:6px;overflow:hidden;background:#101a29;"><div style="padding:7px 9px;color:#9cc5ff;font-weight:700;font-size:12px;border-bottom:1px solid #253a55;">${esc(title)}</div><div style="overflow:auto;max-height:280px;"><table class="mc-rigid-review-table" style="border-collapse:collapse;font-size:12px;min-width:100%;"><thead><tr>${headers.map((header) => `<th style="white-space:nowrap;">${esc(header)}</th>`).join('')}</tr></thead><tbody>${rowsHtml}</tbody></table></div><div class="model-converters-workflow-detail-text" style="padding:6px 8px;">${esc(helpText)}</div></section>`; }
 function enhancedHintPanel(config) { ensureValveHintConfig(config); return `${hintPanel(config)}<details class="model-converters-workflow-master-card" style="margin:8px 0;"><summary style="cursor:pointer;color:#d7e6ff;font-weight:700;">Editable weight keyword / factor rules</summary><div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;align-items:stretch;"><label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#9cc5ff;">Length gate (mm)<input type="number" min="0" step="0.1" data-wm-weight-tolerance value="${attr(valveHintLengthToleranceMm(config))}" style="max-width:180px;background:#0b1320;color:#e6edf5;border:1px solid #31455f;border-radius:6px;padding:6px;"></label>${editableRuleTable('DTXR semantic keyword rules', ['On', 'Priority', 'Code', 'Label', 'Regex patterns'], semanticRuleRowsHtml(config), 'Use one regex per line. Higher priority rules use lower priority numbers.')}${editableRuleTable('Non-standard valve factor rules', ['On', 'Priority', 'Code', 'Label', 'Regex patterns', 'Targets'], factorRuleRowsHtml(config), 'Targets use CODE|Label|Factor, one per line. Candidate weight uses the maximum factored interpolated/extrapolated subset weight.')}</div><div class="model-converters-workflow-detail-text" style="margin-top:8px;">Factor targets use semantic codes such as CONTROL and BALL. Candidate weight uses the maximum factored interpolated/extrapolated subset weight and flags odd extrapolation ratios.</div></details>`; }
 function methodLabel(candidate) { if (candidate?.flangeWeightFallback) return 'Flange extrapolated'; if (candidate?.specialFactorRule) return candidate?.oddEntry ? 'Factor odd' : 'Factor'; if (candidate?.weightMethod === 'length-interpolated') return 'Interpolated'; if (candidate?.weightMethod === 'length-extrapolated' && candidate?.inferredWeight) return 'Extrapolated'; if (candidate?.zeroFallback) return 'No match'; return candidate?.preferred ? 'Suggested' : ''; }
-function renderAcceptedChip(candidate, rowIndex, issue) { const value = selectedWeight(candidate); const label = desc(candidate); const title = [`Rating: ${issue.rating || '-'}`, `TypeDesc: ${label}`, `Selected weight: ${value} kg`, `Length delta: ${nfmt(candidate.lengthDelta)} mm`, candidate?.weightWarning || ''].filter(Boolean).join(' | '); const marker = candidate?.inferredWeight ? '≈ ' : (candidate.preferred ? '★ ' : ''); const method = methodLabel(candidate); const suffix = method ? ` · ${method}` : ` · Δ${esc(nfmt(candidate.lengthDelta))}`; return `<button type="button" class="mc-rigid-review-candidate${candidate.preferred ? ' best' : ''}" data-wm-candidate="${rowIndex}" data-wm-weight="${attr(value)}" title="${attr(title)}" style="font-size:11px;line-height:1.1;padding:3px 6px;border-radius:999px;white-space:nowrap;max-width:330px;overflow:hidden;text-overflow:ellipsis;">${marker}${esc(value)}kg${suffix}</button>`; }
+function renderAcceptedChip(candidate, rowIndex, issue) {
+  const value = selectedWeight(candidate);
+  const confidence = xmlCiiWeightSuggestionConfidence(candidate);
+  const confidenceText = confidence === null ? 'unscored' : `${Math.round(confidence * 100)}% match`;
+  const title = [`Rating: ${issue.rating || '-'}`, `TypeDesc: ${desc(candidate)}`, `Selected weight: ${value} kg`,
+    `Confidence: ${confidenceText}`, `Length delta: ${nfmt(candidate.lengthDelta)} mm`, candidate?.weightWarning || '']
+    .filter(Boolean).join(' | ');
+  const marker = candidate?.inferredWeight ? '≈ ' : (candidate.preferred ? '★ ' : '');
+  const method = methodLabel(candidate);
+  const suffix = method ? ` · ${method}` : ` · Δ${nfmt(candidate.lengthDelta)}`;
+  return `<button type="button" class="mc-rigid-review-candidate${candidate.preferred ? ' best' : ''}"
+    data-wm-candidate="${rowIndex}" data-wm-weight="${attr(value)}" title="${attr(title)}"
+    style="font-size:11px;line-height:1.1;padding:3px 6px;border-radius:999px;white-space:nowrap;max-width:330px;overflow:hidden;text-overflow:ellipsis;">${marker}${esc(value)}kg · ${esc(confidenceText)}${esc(suffix)}</button>`;
+}
 function renderRejectedChip(candidate) { return `<span class="mc-rigid-review-candidate mc-wm-chip-rejected" title="${attr(candidate.rejectedReason || '')}" style="font-size:11px;line-height:1.1;padding:3px 6px;border-radius:999px;white-space:nowrap;max-width:330px;overflow:hidden;text-overflow:ellipsis;opacity:.72;border-style:dashed!important;">× ${esc(desc(candidate))} · Δ${esc(nfmt(candidate.lengthDelta))}mm</span>`; }
 function enrichedOptionsForWeightMatch(config) { const split = truthy(config?.splitCondensedValveFlange) || truthy(config?.split_condensed_valve_flange); return { dryRun: true, skipAutoWeightMatch: true, supportConfigJson: JSON.stringify(config || {}), splitCondensedValveFlange: split, split_condensed_valve_flange: split, condenseRigidXsd: truthy(config?.condenseRigidXsd) || truthy(config?.condense_rigid_xsd) }; }
 function widthTh(label, widthPx) { return `<th style="min-width:${widthPx}px;width:${widthPx}px;resize:horizontal;overflow:auto;white-space:nowrap;">${esc(label)}</th>`; }
@@ -271,7 +291,7 @@ function applyWeightRulePanelConfig(panelEl, config) { const cfg = plainObject(c
 
 export function xmlCiiRenderWeightMatchPhase() {
   const info = 'Default Rating authority is the exact Rating shown in Preview. Weight Match does not derive Rating again.';
-  return `<div class="model-converters-workflow-detail-title">5 Weight Match <span title="${attr(info)}" style="cursor:help;color:#8bb7ff;border:1px solid #406089;border-radius:50%;padding:0 5px;font-size:11px;">i</span></div><div class="model-converters-workflow-detail-text">Weight candidates use the Rating already shown in Preview. Use the DTXR button only when you explicitly want node DTXR Rating instead.</div><div id="mc-wm-hint-panel"></div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0;"><button type="button" class="model-converters-run-btn" id="mc-wm-refresh">Build Weight Data</button><button type="button" class="model-converters-download-btn" id="mc-wm-use-dtxr-rating">Use Rating as per DTXR</button><button type="button" class="model-converters-download-btn" id="mc-wm-fill-best">Use all ★ preferred</button><button type="button" class="model-converters-download-btn" id="mc-wm-length-toggle" title="Convert small master lengths (<100) from inch to mm. Default OFF.">⇄ in→mm: OFF</button><span id="mc-wm-status" class="mc-diag-run-status"></span></div><div id="mc-wm-content"><div class="model-converters-workflow-detail-note">Click <strong>Build Weight Data</strong> to compute matches using Preview Rating.</div></div>`;
+  return `<div class="model-converters-workflow-detail-title">5 Weight Match <span title="${attr(info)}" style="cursor:help;color:#8bb7ff;border:1px solid #406089;border-radius:50%;padding:0 5px;font-size:11px;">i</span></div><div class="model-converters-workflow-detail-text">Weight suggestions auto-apply only at <strong>60–100% match confidence</strong> and when available A1/A2 empirical estimates are <strong>within ±50%</strong>. Lower-confidence, out-of-range, or unvalidated weights require review. Rating follows Preview unless you explicitly select DTXR.</div><div id="mc-wm-hint-panel"></div><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0;"><button type="button" class="model-converters-run-btn" id="mc-wm-refresh">Build Weight Data</button><button type="button" class="model-converters-download-btn" id="mc-wm-use-dtxr-rating">Use Rating as per DTXR</button><button type="button" class="model-converters-download-btn" id="mc-wm-fill-best">Apply eligible suggestions (60–100%)</button><button type="button" class="model-converters-download-btn" id="mc-wm-length-toggle" title="Convert small master lengths (<100) from inch to mm. Default OFF.">⇄ in→mm: OFF</button><span id="mc-wm-status" class="mc-diag-run-status"></span></div><div id="mc-wm-content"><div class="model-converters-workflow-detail-note">Click <strong>Build Weight Data</strong> to compute matches using Preview Rating.</div></div>`;
 }
 
 const WM_CACHE_KEY = 'xml-cii-wm-cache-v2-preview-rating';
@@ -292,6 +312,7 @@ export function bindXmlCiiWeightMatchPhase(detailEl, { xmlFile, stagedJsonText, 
   const panelEl = detailEl.querySelector('#mc-wm-hint-panel');
   if (!contentEl) return;
   let localIssues = [];
+  let workingMasterRows = [];
   let ratingMode = 'preview';
   const status = (message, tone) => { if (statusEl) { statusEl.textContent = message || ''; statusEl.className = `mc-diag-run-status ${tone || ''}`.trim(); } };
   const activeConfig = () => mergeRuntimeOverrides(mergeRuntimeOverrides(mergeRuntimeOverrides(config, currentDomSupportConfig()), getXmlCiiPreviewRuntimeConfig()), currentDomSupportConfig());
@@ -324,17 +345,37 @@ export function bindXmlCiiWeightMatchPhase(detailEl, { xmlFile, stagedJsonText, 
     }).join('');
     const cfg = activeConfig();
     const authorityText = ratingMode === 'dtxr' ? 'Explicit DTXR Rating mode' : 'Exact Rating shown in Preview';
-    contentEl.innerHTML = `<div class="model-converters-workflow-detail-note" style="margin-bottom:8px;">Rating authority: <strong>${esc(authorityText)}</strong>. Weight Match does not derive Rating again. Exact candidate length gate is ±${nfmt(valveHintLengthToleranceMm(cfg))} mm. Length conversion is ${convOn(cfg) ? 'ON' : 'OFF'}.</div><div class="mc-rigid-review-table-wrap" style="overflow:auto;max-height:48vh;"><table class="mc-rigid-review-table" style="border-collapse:collapse;font-size:12px;table-layout:auto;"><thead><tr>${[['Status', 140], ['Branch', 280], ['Line Key', 110], ['ComponentType', 130], ['Bore', 90], ['Rating', 90], ['Node', 90], ['ComponentRefNo_Endpoint', 190], ['DTXR', 260], ['Valve Hint', 160], ['Length', 100], ['Weight (kg)', 110], ['Nearest Suggestions', 360]].map(([label, width]) => widthTh(label, width)).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+    contentEl.innerHTML = `<div class="model-converters-workflow-detail-note" style="margin-bottom:8px;">Rating authority: <strong>${esc(authorityText)}</strong>. Weight Match does not derive Rating again. Exact candidate length gate is ±${nfmt(valveHintLengthToleranceMm(cfg))} mm. Length conversion is ${convOn(cfg) ? 'ON' : 'OFF'}.</div><div class="mc-rigid-review-table-wrap" style="overflow:auto;max-height:48vh;"><table class="mc-rigid-review-table" style="border-collapse:collapse;font-size:12px;table-layout:auto;"><thead><tr>${[['Status', 140], ['Branch', 280], ['Line Key', 110], ['ComponentType', 130], ['Bore', 90], ['Rating', 90], ['Node', 90], ['ComponentRefNo_Endpoint', 190], ['DTXR', 260], ['Valve Hint', 160], ['Length', 100], ['Weight (kg)', 110], ['Nearest Suggestions (match %)', 360]].map(([label, width]) => widthTh(label, width)).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
     contentEl.querySelectorAll('[data-wm-candidate]').forEach((button) => button.addEventListener('click', () => { const input = contentEl.querySelectorAll('.mc-rigid-review-input')[Number(button.dataset.wmCandidate)]; if (!input) return; input.value = button.dataset.wmWeight || ''; input.dispatchEvent(new Event('change', { bubbles: true })); }));
   };
-  const fillBest = () => { let count = 0; contentEl.querySelectorAll('.mc-rigid-review-input').forEach((input, index) => { const best = localIssues[index]?.candidates?.[0]; if (!best || Number(selectedWeight(best)) <= 0 || best.zeroFallback) return; input.value = String(selectedWeight(best)); saveInput(input); count += 1; }); return count; };
+  const fillBest = () => {
+    const cfg = activeConfig();
+    const masterRows = Array.isArray(cfg?.weight?.masterRows) && cfg.weight.masterRows.length
+      ? cfg.weight.masterRows : workingMasterRows;
+    if (!masterRows.length) return 0;
+    const validator = createEmpiricalWeightValidator({ masterRows });
+    let count = 0;
+    contentEl.querySelectorAll('.mc-rigid-review-input').forEach((input, index) => {
+      const issue = localIssues[index];
+      const best = issue?.candidates?.[0];
+      if (!best) return;
+      const qualified = qualifiedXmlCiiRigidAutoWeightCandidate(
+        { ...issue, ranking: { best } }, { validator },
+      );
+      if (!qualified) return;
+      input.value = String(qualified.weightKg);
+      saveInput(input);
+      count += 1;
+    });
+    return count;
+  };
   const compute = async (opts = {}) => {
     let liveConfig = activeConfig();
     syncToggle(); syncRatingMode(); drawPanel();
     const file = currentXmlFile(xmlFile);
-    if (!file) { localIssues = []; contentEl.innerHTML = '<div class="model-converters-workflow-detail-note">No XML source loaded. Import an XML file first.</div>'; status('No input', 'bad'); return; }
+    if (!file) { localIssues = []; workingMasterRows = []; contentEl.innerHTML = '<div class="model-converters-workflow-detail-note">No XML source loaded. Import an XML file first.</div>'; status('No input', 'bad'); return; }
     liveConfig = await ensureWeightMasterRows(liveConfig);
-    if (!hasWeightMasterRows(liveConfig)) { localIssues = []; renderWeightMasterBlocked(contentEl); status('Weight master not ready', 'bad'); return; }
+    if (!hasWeightMasterRows(liveConfig)) { localIssues = []; workingMasterRows = []; renderWeightMasterBlocked(contentEl); status('Weight master not ready', 'bad'); return; }
     const snapshot = readXmlCiiPreviewRatingSnapshot();
     if (!opts.force) {
       const stagedSourceForFp = typeof resolveStagedJsonText === 'function' ? await resolveStagedJsonText(liveConfig).catch(() => ({ text: '' })) : { text: await stagedText(stagedJsonText).catch(() => '') };
@@ -342,6 +383,7 @@ export function bindXmlCiiWeightMatchPhase(detailEl, { xmlFile, stagedJsonText, 
       const fingerprint = wmCacheFingerprint(file, jsonLenForFp, liveConfig?.weight?.masterRows?.length || 0, liveConfig?.overrides, ratingMode, snapshot.revision);
       const cached = readCache(WM_CACHE_KEY);
       if (cached?.fp === fingerprint && Array.isArray(cached?.data) && cached.data.length) {
+        workingMasterRows = liveConfig.weight.masterRows;
         localIssues = cached.data.map((row) => applyXmlCiiFlangeWeightFallbackToIssue(rerankWithRating(row, liveConfig, { ratingMode, snapshot }), liveConfig));
         const mapped = localIssues.filter((row) => row.mapped).length;
         const zero = localIssues.filter((row) => row.candidates?.[0]?.zeroFallback).length;
@@ -362,7 +404,8 @@ export function bindXmlCiiWeightMatchPhase(detailEl, { xmlFile, stagedJsonText, 
       const cfg = await ensureWeightMasterRows(mergeRuntimeOverrides(mergeRuntimeOverrides(enrichedConfig, liveConfig), getXmlCiiPreviewRuntimeConfig()));
       if (!hasWeightMasterRows(cfg)) { localIssues = []; renderWeightMasterBlocked(contentEl); status('Weight master not ready', 'bad'); return; }
       const geometryXml = applyXmlCiiStagedGeometryAuthority(enriched.xmlText || xmlText, jsonText, { config: cfg }).xmlText;
-      localIssues = applyNodeMeta(collectXmlCiiWeightMatchRows(geometryXml, jsonText, cfg), geometryXml).map(cleanRow).filter(Boolean).map((row) => applyXmlCiiFlangeWeightFallbackToIssue(rerankWithRating(row, cfg, { ratingMode, snapshot }), cfg));
+      workingMasterRows = cfg.weight.masterRows;
+       localIssues = applyNodeMeta(collectXmlCiiWeightMatchRows(geometryXml, jsonText, cfg), geometryXml).map(cleanRow).filter(Boolean).map((row) => applyXmlCiiFlangeWeightFallbackToIssue(rerankWithRating(row, cfg, { ratingMode, snapshot }), cfg));
       const mapped = localIssues.filter((row) => row.mapped).length;
       const suggested = localIssues.filter((row) => row.candidates?.[0]?.preferred).length;
       const flange = localIssues.filter((row) => row.candidates?.[0]?.flangeWeightFallback).length;
@@ -385,7 +428,7 @@ export function bindXmlCiiWeightMatchPhase(detailEl, { xmlFile, stagedJsonText, 
   detailEl.querySelector('#mc-wm-refresh')?.addEventListener('click', () => compute({ force: true }));
   ratingModeButton?.addEventListener('click', () => { ratingMode = ratingMode === 'preview' ? 'dtxr' : 'preview'; invalidateXmlCiiWeightCache(); syncRatingMode(); compute({ force: true }); });
   toggleEl?.addEventListener('click', () => { invalidateXmlCiiWeightCache(); const cfg = activeConfig(); cfg.weight = plainObject(cfg.weight) ? cfg.weight : {}; cfg.weight.convertSmallLengthsInToMm = cfg.weight.convertSmallLengthsInToMm !== true; onSaveConfig(cfg); contentEl.innerHTML = '<div class="model-converters-workflow-detail-note">Length conversion changed. Click <strong>Build Weight Data</strong> to recompute.</div>'; localIssues = []; syncToggle(); });
-  detailEl.querySelector('#mc-wm-fill-best')?.addEventListener('click', () => { const count = fillBest(); status(`Applied ${count} preferred weight(s)`, count ? 'ok' : 'bad'); });
+  detailEl.querySelector('#mc-wm-fill-best')?.addEventListener('click', () => { const count = fillBest(); status(`Applied ${count} suggestion(s): ${XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT}–${XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT}% confidence + empirical ±50%`, count ? 'ok' : 'bad'); });
   panelEl?.addEventListener('change', () => { try { const cfg = applyWeightRulePanelConfig(panelEl, activeConfig()); cfg.weight.valveHintMapping = valveHintMappingRows(cfg); onSaveConfig(cfg); invalidateXmlCiiWeightCache(); contentEl.innerHTML = '<div class="model-converters-workflow-detail-note">Weight keyword/factor rules changed. Click <strong>Build Weight Data</strong> to recompute.</div>'; localIssues = []; status('Weight rules saved'); } catch (error) { status(error?.message || String(error), 'bad'); } });
   contentEl.addEventListener('change', (event) => { const input = event.target.closest?.('.mc-rigid-review-input'); if (input) saveInput(input); });
   syncToggle(); syncRatingMode(); drawPanel();
