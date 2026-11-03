@@ -96,6 +96,6 @@ assert.match(finalHtml,/A2 estimate \/ deviation/);
 const modeAHtml=modeARigidWeightReviewMarkup(flat,entries);
 assert.match(modeAHtml,/Suggestion auto-apply: match confidence 60–100%/);
 assert.match(modeAHtml,/±50%/);
-assert.match(modeAHtml,/Apply Eligible Suggestions \\(60–100%\\)/);
+assert.ok(modeAHtml.includes('Apply Eligible Suggestions (60–100%)'), 'Mode A button must show suggestion confidence range');
 
 console.log('Weight Match 60–100%, Mode A auto-apply 60–100%, and final dialog empirical ±50% UI: PASS');
