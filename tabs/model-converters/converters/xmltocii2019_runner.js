@@ -287,6 +287,16 @@ export async function run(context) {
     collectXmlCiiWeightMatchRows(enriched.xmlText, stagedJsonText, enriched.config),
     enriched.config?.weight?.masterRows || [],
   );
+  const malformedRigidOwners = (finalRigidWeightAudit.allRows || []).filter(
+    (row) => ['MISSING', 'INVALID', 'NEGATIVE'].includes(row.ownerWeightState)
+  );
+  if (malformedRigidOwners.length) {
+    const first = malformedRigidOwners[0];
+    throw new Error(
+      `Python CII export blocked: ${malformedRigidOwners.length} RIGID edge(s) have missing, invalid or negative owner weights. ` +
+      `Example ${first.branchName} / ${first.fromNode} → ${first.toNode} (${first.ownerWeightState}).`
+    );
+  }
   enriched.stats.postExportRigidWeightReviewFlags = finalRigidWeightAudit.summary.flaggedEdges;
   enriched.diagnostics.push(...finalRigidWeightAudit.flagged.map((row) => ({
     type: 'final-rigid-weight-review-required', ...row,
