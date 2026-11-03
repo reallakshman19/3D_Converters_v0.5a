@@ -289,7 +289,11 @@ const EXPRESSION=String.raw`(async()=>{
     if(!response.ok)throw Error('Material TXT fixture unavailable');
     return new File([await response.arrayBuffer()],'PCF_MAT_MAP.TXT',{type:'text/plain'});
   });
-  await importMasterFromUi('linelist','lineList',originalXlsx,107);
+  // Production SheetJS import on the original Linelist worksheet retains 112 rows.
+  // Historical Python fixture builder filtered this to 107; the distinct
+  // effective inputs must NOT be silently called byte-identical.
+  result.pythonFixtureLineRows=107;
+  await importMasterFromUi('linelist','lineList',originalXlsx,112);
   await importMasterFromUi('pipingClass','pipingClass',csvFile(classes,'Piping_class_master.csv'),10699);
   await importMasterFromUi('materialMap','materialMap',materialFile,originalConfig?.material?.mapRows?.length||0);
   await importMasterFromUi('weight','weight',csvFile(weights,'wtValveweights.csv'),1595);
@@ -304,6 +308,38 @@ const EXPRESSION=String.raw`(async()=>{
     result.previewButtonLabels=[...document.querySelectorAll('.app-content button')].map(x=>x.innerText.trim()).filter(x=>/Preview|Build|Map|Review|Refresh/i.test(x)).slice(0,32);
     result.previewHostCount=document.querySelectorAll('.app-content #mc-preview-table-host').length;
     result.phasePreviewReached=true;
+    const host=document.querySelector('.app-content #mc-preview-table-host');
+    result.previewCacheInitial={
+      present:!!host,
+      status:host?.dataset.mcPreviewCacheStatus||null,
+      digest:host?.dataset.mcPreviewCacheDigest||null,
+      evidence:host?.querySelector('[data-mc-preview-cache-evidence]')?.innerText?.slice(0,350)||'',
+      tableRows:host?.querySelectorAll('table.mc-preview-table tbody tr')?.length||0,
+      persistedV7EnvelopeBytes:(localStorage.getItem('xml-cii-pv-cache-v8-rating-policy')||'').length,
+      persistedLegacyBridgeBytes:(localStorage.getItem('xml-cii-pv-cache-v8-dtxr')||'').length,
+    };
+    result.uiMappedCount=/✓ Mapped:\s*(\d+)/.exec(result.previewText)?.[1]||null;
+    result.uiUnmappedCount=/Unmapped:\s*(\d+)/.exec(result.previewText)?.[1]||null;
+    // Test the active v7 Preview reentry path (and whether exact-input cache
+    // remains available), not only the underlying legacy Preview component.
+    const diagnostics=document.querySelector('.app-content [data-phase="diagnostics"]');
+    if(diagnostics){
+      diagnostics.click();await pause(430);
+      const reenter=await waitFor(()=>document.querySelector('.app-content [data-phase="preview"]'),6000);
+      if(reenter){
+        reenter.click(); await pause(1450);
+        const again=document.querySelector('.app-content #mc-preview-table-host');
+        result.previewCacheReentry={
+          status:again?.dataset.mcPreviewCacheStatus||null,
+          evidence:again?.querySelector('[data-mc-preview-cache-evidence]')?.innerText?.slice(0,350)||'',
+          digest:again?.dataset.mcPreviewCacheDigest||null,
+          tableRows:again?.querySelectorAll('table.mc-preview-table tbody tr')?.length||0,
+          legacyBridgeBytes:(localStorage.getItem('xml-cii-pv-cache-v8-dtxr')||'').length,
+          envelopeBytes:(localStorage.getItem('xml-cii-pv-cache-v8-rating-policy')||'').length,
+        };
+        result.uiSteps.push('reentered actual phase 4 Preview through Diagnostics for v7 cache lifecycle audit');
+      }
+    }
   }else {
     result.previewNavigationBlocker='Preview phase button not present after file and staged import';
     result.finalAppText=(document.querySelector('.app-content')?.innerText||'').slice(0,1650);
@@ -353,7 +389,7 @@ async function main(){
     result.inputs={xml:hash(files.xml),staged:hash(files.staged),config:hash(files.config)};
     result.observation=await browserCapture(files);
     if(!result.observation?.liveShell)throw Error(result.observation?.blocker||'Real workbench not reached');
-    if(!result.observation?.allMasterImportsVerified || !result.observation?.phasePreviewReached || result.observation.previewHostCount<1)
+    if(!result.observation?.allMasterImportsVerified || !result.observation?.phasePreviewReached || result.observation.previewHostCount<1 || result.observation.uiMappedCount!=='30')
       throw Error('G3 master import/Preview gate NOT_PROVEN; see observation.masters and previewHostCount');
     result.status='UI_MASTER_IMPORT_AND_PREVIEW_OBSERVED';
   }catch(error){result.error=String(error?.message||error);}
