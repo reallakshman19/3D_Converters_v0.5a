@@ -47,7 +47,7 @@ function serveSource(files){
       const url=new URL(req.url,'http://127.0.0.1');
       const pathname=decodeURIComponent(url.pathname);
       if(pathname==='/'){res.writeHead(200,{'Content-Type':'text/html;charset=utf-8','Cache-Control':'no-store'});res.end(await readFile(join(ROOT,'index.html')));return;}
-      const fixture={'/__glrd/source.xml':files.xml,'/__glrd/stage.json':files.staged,'/__glrd/config.json':files.config,'/__glrd/audit-mode':files.mode}[pathname];
+      const fixture={'/__glrd/source.xml':files.xml,'/__glrd/stage.json':files.staged,'/__glrd/config.json':files.config,'/__glrd/linelist.xlsx':files.linelist,'/__glrd/material-map.txt':files.material,'/__glrd/audit-mode':files.mode}[pathname];
       let data=fixture;
       if(data===undefined){
         const location=resolve(ROOT,'.'+pathname);
@@ -110,7 +110,8 @@ const EXPRESSION=String.raw`(async()=>{
     }
     return null;
   }
-  const result={status:'NOT_PROVEN',basis:'real index.html entrypoint with UI DOM interactions',uiSteps:[],appErrors:[],warnings:[]};
+  const result={status:'NOT_PROVEN',basis:'real index.html entrypoint with UI DOM interactions',uiSteps:[],appErrors:[],appAlerts:[],warnings:[],masters:[]};
+  window.alert=(message)=>{result.appAlerts.push(String(message));};
   const errListener=e=>result.appErrors.push(String(e.message||e.error?.message||e));
   const rejectListener=e=>result.appErrors.push('unhandledrejection: '+String(e.reason?.message||e.reason));
   window.addEventListener('error',errListener);
@@ -191,6 +192,81 @@ const EXPRESSION=String.raw`(async()=>{
       }else{result.stagedImportBlocker='Staged fixture HTTP '+response.status;}
     }else{result.stagedImportBlocker='No staged-json-file input in active phase';}
   }
+  // Authentic source/master UI flow: original XLSX, material TXT, and deterministic
+  // CSV representations of the externally pinned JSON master row arrays.
+  // Transformed CSV is a test transport only. Report schema/row identities;
+  // it is NOT a byte-identical import of the original JSON or validated against
+  // the historical direct-service effective config.
+  const originalConfig=JSON.parse(await (await fetch('/__glrd/config.json')).text());
+  function encodeCsv(rows) {
+    if(!Array.isArray(rows)||rows.length===0)throw Error('Master rows are missing');
+    const keys=[...new Set(rows.flatMap(row=>Object.keys(row||{})))];
+    const csvValue=(value)=> {
+      const raw=value==null?'':typeof value==='object'?JSON.stringify(value):String(value);
+      return '"'+raw.replaceAll('"','""')+'"';
+    };
+    const lines=[keys.map(csvValue).join(',')];
+    for(const row of rows)lines.push(keys.map(key=>csvValue(row?.[key])).join(','));
+    return {body:lines.join('\r\n')+'\r\n',headers:keys,rows:rows.length};
+  }
+  const classes=encodeCsv(originalConfig?.pipingClass?.masterRows||[]);
+  const weights=encodeCsv(originalConfig?.weight?.masterRows||[]);
+  result.convertedMasterTransport={
+    pipingClass:{rows:classes.rows,headers:classes.headers,bytes:classes.body.length,transport:'JSON rows -> deterministic CSV for real UI import'},
+    weight:{rows:weights.rows,headers:weights.headers,bytes:weights.body.length,transport:'JSON rows -> deterministic CSV for real UI import'},
+  };
+  async function importMasterFromUi(subTab,key,filePromise,expected) {
+    const trace={subTab,key,expected,pass:false};
+    result.masters.push(trace);
+    const sourceNav=await waitFor(()=>document.querySelector('.app-content [data-phase="source"]'),5000);
+    if(!sourceNav){trace.error='Source phase not accessible';return trace;}
+    sourceNav.click();
+    await pause(300);
+    const sub=await waitFor(()=>document.querySelector('.app-content [data-sub-tab="'+subTab+'"]'),7000);
+    if(!sub){trace.error='Subtab control not present';return trace;}
+    sub.click();
+    await pause(400);
+    trace.preImportPage=(document.querySelector('.app-content .xml-cii-main-workspace')?.innerText||'').slice(0,480);
+    const input=await waitFor(()=>document.querySelector('.app-content input[type=file][data-master-file="'+key+'"]'),8000);
+    if(!input){trace.error='Master file input missing';return trace;}
+    const file=await filePromise();
+    trace.filename=file.name;trace.originalFileBytes=file.size;
+    const dt=new DataTransfer();dt.items.add(file);input.files=dt.files;
+    const alertBefore=result.appAlerts.length;
+    input.dispatchEvent(new Event('change',{bubbles:true}));
+    result.uiSteps.push('uploaded '+file.name+' via Source & Masters > '+subTab+' actual file input');
+    const ready=await waitFor(()=>{
+      const page=document.querySelector('.app-content .xml-cii-main-workspace');
+      const t=page?.innerText||'';
+      if(result.appAlerts.length>alertBefore)return 'alert';
+      if(t.includes('Loaded:')&&t.includes(file.name))return 'loaded';
+      if(t.includes('Imported and auto-mapped')&&t.includes(file.name))return 'mapped';
+      if(t.includes('Parse error:')||t.includes('Failed to parse'))return 'error';
+      return null;
+    },35000);
+    trace.ready=ready||'timeout';
+    trace.alerts=result.appAlerts.slice(alertBefore);
+    trace.afterPage=(document.querySelector('.app-content .xml-cii-main-workspace')?.innerText||'').slice(0,850);
+    trace.storageRowCount=(()=>{try{return JSON.parse(localStorage.getItem('xml-cii-master-'+key)||'null')?.length??null;}catch{return null;}})();
+    trace.pass=(trace.ready==='loaded'||trace.ready==='mapped')&&trace.storageRowCount===expected;
+    if(!trace.pass)trace.error='Master import not verified in persisted row state: expected '+expected+', got '+trace.storageRowCount;
+    return trace;
+  }
+  const originalXlsx=()=>fetch('/__glrd/linelist.xlsx').then(async response=>{
+    if(!response.ok)throw Error('Original XLSX fixture unavailable');
+    return new File([await response.arrayBuffer()],'STD-00-PX-4338-01001-0001-02.xlsx',
+      {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  });
+  const csvFile=(csv,name)=>async()=>new File([csv.body],name,{type:'text/csv'});
+  const materialFile=()=>fetch('/__glrd/material-map.txt').then(async response=>{
+    if(!response.ok)throw Error('Material TXT fixture unavailable');
+    return new File([await response.arrayBuffer()],'PCF_MAT_MAP.TXT',{type:'text/plain'});
+  });
+  await importMasterFromUi('linelist','lineList',originalXlsx,107);
+  await importMasterFromUi('pipingClass','pipingClass',csvFile(classes,'Piping_class_master.csv'),10699);
+  await importMasterFromUi('materialMap','materialMap',materialFile,originalConfig?.material?.mapRows?.length||0);
+  await importMasterFromUi('weight','weight',csvFile(weights,'wtValveweights.csv'),1595);
+  result.allMasterImportsVerified=result.masters.every(item=>item.pass);
   const preview=await waitFor(()=>document.querySelector('.app-content [data-phase="preview"]'),7000);
   result.phaseButtonsBeforePreview=[...document.querySelectorAll('.app-content [data-phase]')].map(x=>x.dataset.phase);
   if(preview){
@@ -245,7 +321,8 @@ async function main(){
   try{
     result.sourceSha=assertCheckout();
     const files={xml:await readFile(arg('xml')),staged:await readFile(arg('staged')),
-      config:await readFile(arg('config')),mode:'g3-app'};
+      config:await readFile(arg('config')),linelist:await readFile(arg('linelist')),
+      material:await readFile(arg('material-map')),mode:'g3-app'};
     result.inputs={xml:hash(files.xml),staged:hash(files.staged),config:hash(files.config)};
     result.observation=await browserCapture(files);
     if(!result.observation?.liveShell)throw Error(result.observation?.blocker||'Real workbench not reached');
