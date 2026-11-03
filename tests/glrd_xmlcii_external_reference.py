@@ -130,9 +130,10 @@ def staged_flange_record(path, ref):
 def run_one(source, target, kind, out, scale, staged, config):
     out.mkdir(parents=True, exist_ok=True)
     input_path = source
-    if kind == "reviewed":
-        input_path = out / "reviewed-source.xml"
-        reviewed_input(source, input_path, 123.974)
+    candidateMasses = {"reviewed": 123.974, "master900": 15.0, "master1500": 14.0}
+    if kind in candidateMasses:
+        input_path = out / f"{kind}-source.xml"
+        reviewed_input(source, input_path, candidateMasses[kind])
     cii_path = out / f"{kind}.cii"
     enriched = out / f"{kind}-enriched.xml"
     original_parse = base._parse_xml_document
@@ -209,6 +210,9 @@ def main():
     config = linelist_config(args.linelist) if args.linelist else {}
     raw = run_one(args.source, folder, "raw", folder, args.weight_scale, args.staged, config)
     reviewed = run_one(args.source, folder, "reviewed", folder, args.weight_scale, args.staged, config)
+    if args.label == "pr-after":
+        run_one(args.source, folder, "master900", folder, args.weight_scale, args.staged, config)
+        run_one(args.source, folder, "master1500", folder, args.weight_scale, args.staged, config)
     summary = {"label": args.label, "raw": {k: raw[k] for k in ("edgeCount", "rigidEdgeCount", "restraintCount")},
                "reviewed": {k: reviewed[k] for k in ("edgeCount", "rigidEdgeCount", "restraintCount")},
                "node10CoordsRaw": raw["coords"].get("10"),

@@ -122,6 +122,30 @@ def run(before, after, out):
     assert len(changed) == 1, f"Expected exactly one changed RIGID auxiliary row, got {len(changed)}"
     assert_close([float(changed[0][1].split()[0])], [1239.74], "Node 460 CII rigid weight")
     summary["singleRigidAuxWeightChanged"] = True
+    for kind, mass in (("master900", 15.0), ("master1500", 14.0)):
+        corrected = json.loads((after / f"{kind}-report.json").read_text())
+        assert math.isclose(float(corrected["enrichedNode460"]["Weight"]), mass)
+        assert_close([corrected["node460Edges"][0]["ciiMassForceN"]], [mass * 10],
+                     f"{kind}: CII weight mass-to-force")
+        assert corrected["skippedRestraintNodeNumbers"] == json.loads(
+            (after / "reviewed-report.json").read_text())["skippedRestraintNodeNumbers"]
+        corrected_sections = records(after / f"{kind}.cii")
+        reviewed_sections = records(after / "reviewed.cii")
+        for section in corrected_sections:
+            if section != "RIGID":
+                assert corrected_sections[section] == reviewed_sections[section], f"{kind}: unrelated CII change in {section}"
+        differences = [(x, y) for x, y in zip(reviewed_sections["RIGID"], corrected_sections["RIGID"]) if x != y]
+        assert len(differences) == 1, f"{kind}: expected a single corrected RIGID record"
+        assert_close([float(differences[0][1].split()[0])], [mass * 10], f"{kind}: one corrected weight")
+        for output_kind, suffix in (("enriched", "-enriched.xml"), ("cii", ".cii")):
+            diff = difflib.unified_diff(
+                (before / f"reviewed{suffix}").read_text().splitlines(keepends=True),
+                (after / f"{kind}{suffix}").read_text().splitlines(keepends=True),
+                fromfile=f"main-before/reviewed{suffix}", tofile=f"pr-after/{kind}{suffix}")
+            (out / f"{kind}-{output_kind}.diff").write_text("".join(diff))
+        summary["cases"][kind] = {"candidateMassKg": mass, "ciiForceN": mass * 10,
+                                 "source": "historical 50 mm Weldneck Flange master; rating-specific scenario",
+                                 "warningCount": len(corrected["skippedRestraintNodeNumbers"])}
     (out / "comparison.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
 
