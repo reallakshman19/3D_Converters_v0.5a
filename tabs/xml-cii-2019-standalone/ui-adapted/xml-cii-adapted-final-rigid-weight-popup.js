@@ -42,13 +42,20 @@ function reviewRow(issue, index, inNewton) {
     ? 'match confidence unavailable' : `${Number(confidence).toFixed(1)}% match confidence`;
   const ref = issue.componentRefNo || 'Unresolved component reference';
   const displayElement = `${issue.fromNode || '?'} → ${issue.toNode || '?'}`;
-  const exportValue = current === null ? 'unresolved' : `${numberText(current * (inNewton ? 10 : 1), 2)} ${inNewton ? 'N' : 'kg'}`;
+  const ownerState = issue.ownerWeightState || (current === null ? 'MISSING' : 'POSITIVE');
+  const displayedMass = ownerState === 'ZERO' ? '0 kg (zero / non-owner not yet established)' :
+    ownerState === 'MISSING' ? 'MISSING' :
+    ownerState === 'INVALID' ? 'INVALID' :
+    ownerState === 'NEGATIVE' ? 'NEGATIVE (blocked)' :
+    current === null ? 'Unresolved' : `${numberText(current, 3)} kg`;
+  const exportValue = ownerState === 'ZERO' ? `0 ${inNewton ? 'N' : 'kg'}` :
+    current === null ? 'unresolved' : `${numberText(current * (inNewton ? 10 : 1), 2)} ${inNewton ? 'N' : 'kg'}`;
   return `<tr data-final-rigid-review-row style="border-bottom:1px solid #334155;">
     <td style="padding:8px;white-space:nowrap;">${esc(displayElement)}</td>
     <td style="padding:8px;min-width:180px;" title="${attr(issue.branchName)}">${esc(issue.branchName)}</td>
     <td style="padding:8px;word-break:break-all;">${esc(ref)}</td>
     <td style="padding:8px;white-space:nowrap;">${numberText(issue.elementLengthMm)} mm${Number(issue.wholeComponentSpanMm) > 0 ? ` / component ${numberText(issue.wholeComponentSpanMm)} mm` : ''}</td>
-    <td style="padding:8px;white-space:nowrap;">${current === null ? '0 / missing' : `${numberText(current, 3)} kg`}</td>
+    <td style="padding:8px;white-space:nowrap;">${esc(displayedMass)}</td>
     <td style="padding:8px;white-space:nowrap;">${esc(exportValue)}</td>
     <td style="padding:8px;">${suggestion === null ? 'No qualified suggestion' : `${numberText(suggestion, 3)} kg · ${confidenceLabel} (review required)`}</td>
     <td style="padding:8px;min-width:150px;">${evidenceCell(evidence.approach1)}</td>
@@ -78,7 +85,7 @@ export function finalRigidWeightReviewMarkup(issues, options = {}) {
       <div>
         <h2 style="font-size:18px;font-weight:700;color:#fbbf24;margin:0 0 6px;">${manual ? 'Inspect All RIGID Weights — Output / Run' : 'Empirical Weight Deviation Review — Final CII Export'}</h2>
         <div>${manual
-          ? `${issues.length} post-enrichment RIGID element(s), including weights within ±50%, in ${esc(options.sourceName || 'current source')}. Select only the rows you want to approve or correct.`
+          ? `${issues.length} post-enrichment RIGID element(s), including zero, missing, invalid and empirically normal masses, in ${esc(options.sourceName || 'current source')}. Select only the rows you want to approve or correct.`
           : `${issues.length} rigid weight(s) needing approval in ${esc(options.sourceName || 'current source')}: empirical deviation &gt; ±50%, unavailable A1/A2 evidence, or auto-suggestion confidence outside 60–100%.`}</div>
       </div>
       <button type="button" data-final-rigid-cancel style="padding:8px;background:#334155;color:#fff;border:0;border-radius:5px;">${manual ? 'Close Inspection' : 'Cancel CII Export'}</button>
