@@ -90,6 +90,12 @@ function auditBranch(branch, propagationRows, ratioThreshold) {
     if (lengthRatio !== null && lengthRatio < ratioThreshold) {
       row.reviewFlags.push('FULL_COMPONENT_WEIGHT_ON_SHORT_RIGID_ELEMENT');
     }
+    // This is an explicit review trigger, never an automatic weight rejection:
+    // even without paired component endpoints a very short, heavy rigid edge
+    // must not silently escape the Weight Match and final review workflow.
+    if (elementLengthMm !== null && elementLengthMm > 6 && elementLengthMm <= 40 && massKg >= 10) {
+      row.reviewFlags.push('SHORT_HEAVY_RIGID_ELEMENT_REQUIRES_REVIEW');
+    }
     if (!componentRefNo) row.reviewFlags.push('WEIGHT_COMPONENT_REFERENCE_UNKNOWN');
     results.push(row);
   }
