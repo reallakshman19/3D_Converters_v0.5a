@@ -8,9 +8,12 @@ import {
 
 const text = (value) => value == null ? '' : String(value).trim();
 const reference = (value) => text(value).replace(/^=/, '').replace(/\s+/g, '').toUpperCase();
-const REVIEW_NOT_REQUIRED = new Set(['EMPIRICAL_VALIDATION_UNAVAILABLE', 'EMPIRICAL_VALIDATION_PARTIAL']);
 function isReviewRequired(row) {
-  return (row?.reviewFlags || []).some((flag) => !REVIEW_NOT_REQUIRED.has(flag));
+  // The single release gate is the empirical A1/A2 deviation API (±50%).
+  // When neither approach can estimate a weight, require manual review rather
+  // than silently interpreting "unvalidated" as acceptable.
+  return row?.empiricalEvidence?.reportableAbnormality === true
+    || row?.empiricalStatus === 'UNVALIDATED';
 }
 function positive(value) {
   const n = Number(value);
@@ -43,8 +46,11 @@ function edgeReviewIssue(row, nodeRows) {
     empiricalStatus: row.empiricalStatus,
     empiricalA1DeviationPct: row.empiricalA1DeviationPct,
     empiricalA2DeviationPct: row.empiricalA2DeviationPct,
+    empiricalEvidence: row.empiricalEvidence || null,
+    empiricalThresholdPct: row.empiricalThresholdPct,
     weightOrigin: row.weightOrigin,
-    reviewFlags: [...row.reviewFlags],
+    reviewFlags: row.reviewFlags.filter((flag) => flag.startsWith('EMPIRICAL_')),
+    diagnosticFlags: row.reviewFlags.filter((flag) => !flag.startsWith('EMPIRICAL_')),
   };
 }
 function proposalIssue(row, nodeRows) {
@@ -66,8 +72,9 @@ function proposalIssue(row, nodeRows) {
 
 /**
  * Gate the exact standalone CII engine input, NOT the separate Model Converters runner.
- * Every unqualified Preview proposal and any suspicious positive rigid mass must
- * be visible and explicitly confirmed before the Python engine is invoked.
+ * Every positive rigid mass is validated by the empirical A1/A2 API.
+ * Values beyond ±50% or with no available estimate, plus unresolved proposed
+ * masses, must receive explicit approval before the Python engine is invoked.
  */
 export function buildStandaloneFinalRigidReview(parity, config = {}, options = {}) {
   if (typeof DOMParser === 'undefined') throw new Error('XML parser unavailable: final rigid weight review cannot be verified.');
@@ -87,6 +94,7 @@ export function buildStandaloneFinalRigidReview(parity, config = {}, options = {
       const existing = byKey.get(proposal.key);
       existing.reviewFlags = [...new Set([...existing.reviewFlags, ...proposal.reviewFlags])];
       existing.proposedWeightKg = proposal.proposedWeightKg;
+      existing.empiricalEvidence ||= proposal.empiricalEvidence || null;
     } else {
       issues.push(proposal);
       byKey.set(proposal.key, proposal);
