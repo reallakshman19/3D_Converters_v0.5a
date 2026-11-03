@@ -1,4 +1,9 @@
 import { applyXmlCiiRigidWeightOverrides } from './weight-match-model.js';
+import { createEmpiricalWeightValidator } from '../empirical-weight/empirical-weight-validation.js';
+import {
+  XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT,
+  xmlCiiEmpiricalWeightValidationInput,
+} from './rigid-weight-final-validation.js';
 
 function text(value) { return value == null ? '' : String(value).trim(); }
 function weightOf(candidate = {}) {
@@ -14,27 +19,38 @@ function confidenceOf(candidate = {}) {
 function bestCandidate(issue = {}) {
   return issue?.ranking?.best || (Array.isArray(issue?.candidates) ? issue.candidates[0] : null) || null;
 }
+
 /**
- * Confidence >=60% is necessary, not sufficient. Never auto-select an
- * inferred/extrapolated mass, a length mismatch, or an unresolved rating.
+ * Preview autofill is qualified by the existing empirical A1/A2 API.
+ * No arbitrary 60% confidence, 1mm bore, or short/heavy size gate.
  */
 export function qualifiedXmlCiiRigidAutoWeightCandidate(issue = {}, options = {}) {
   const candidate = bestCandidate(issue);
-  const confidence = confidenceOf(candidate);
-  const floor = Number.isFinite(options.minConfidence) ? options.minConfidence : 0.60;
-  const method = text(candidate?.weightMethod || candidate?.method);
-  if (!candidate || weightOf(candidate) === null || confidence === null || confidence < floor) return null;
-  if (issue.ratingConflict || issue.pipingClassNeedsReview || candidate.zeroFallback) return null;
-  if (candidate.flangeWeightFallback || candidate.fallbackSuggestion || candidate.inferredWeight || candidate.specialFactorRule) return null;
-  if (/fallback|extrapolat|interpolat|inferred|special-factor/i.test(method)) return null;
-  if (candidate.lengthQualified !== true || candidate.ratingExact !== true) return null;
-  if (!Number.isFinite(Number(candidate.boreDelta)) || Math.abs(Number(candidate.boreDelta)) >= 1) return null;
-  return { candidate, weightKg: weightOf(candidate), confidence };
+  const proposedWeightKg = weightOf(candidate);
+  if (!candidate || proposedWeightKg === null || candidate.zeroFallback || issue.ratingConflict || issue.pipingClassNeedsReview) return null;
+  const masters = Array.isArray(options.masterRows) && options.masterRows.length
+    ? { masterRows: options.masterRows } : {};
+  const validator = options.validator || createEmpiricalWeightValidator(masters);
+  const empiricalInput = xmlCiiEmpiricalWeightValidationInput({
+    branchName: issue.branchName,
+    toNode: issue.nodeNumber,
+    componentRefNo: issue.componentRefNo,
+    boreMm: issue.boreMm, rating: issue.rating, massKg: proposedWeightKg,
+    weightOrigin: candidate.weightMethod || 'weight-master-candidate',
+  }, { ...issue, candidates: [candidate], candidate });
+  const empiricalEvidence = validator.validate(empiricalInput, {
+    abnormalityThresholdPct: XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT,
+  });
+  if (empiricalEvidence.status === 'UNVALIDATED' || empiricalEvidence.reportableAbnormality) return null;
+  return { candidate, weightKg: proposedWeightKg, confidence: confidenceOf(candidate), empiricalEvidence };
 }
 export function collectXmlCiiAutoRigidWeightsFromIssues(issues = [], options = {}) {
   const weightsByKey = {}, appliedRows = [], remainingIssues = [];
+  const validator = options.validator || createEmpiricalWeightValidator(
+    Array.isArray(options.masterRows) && options.masterRows.length ? { masterRows: options.masterRows } : {},
+  );
   for (const issue of Array.isArray(issues) ? issues : []) {
-    const qualified = qualifiedXmlCiiRigidAutoWeightCandidate(issue, options);
+    const qualified = qualifiedXmlCiiRigidAutoWeightCandidate(issue, { ...options, validator });
     const key = text(issue?.key);
     if (!qualified || !key) { remainingIssues.push(issue); continue; }
     const { candidate, weightKg, confidence } = qualified;
@@ -43,11 +59,11 @@ export function collectXmlCiiAutoRigidWeightsFromIssues(issues = [], options = {
       type: 'rigid-weight-auto-applied', branchName: issue.branchName || '', nodeNumber: issue.nodeNumber || '',
       componentType: issue.componentType || '', componentRefNo: issue.componentRefNo || '', boreMm: issue.boreMm,
       rating: issue.rating, lengthMm: issue.lengthMm, weight: weightKg, confidence,
-      method: 'qualified-direct-master-60-to-100-percent',
+      method: 'empirically-validated-a1-a2-within-50-percent',
       candidateType: candidate.type || candidate.valveType || '', candidateTypeDesc: candidate.typeDesc || '',
       weightMethod: candidate.weightMethod || '', lengthDelta: candidate.lengthDelta,
       semanticSource: candidate.semanticSource || '', semanticReason: candidate.semanticReason || '',
-      message: `Auto-applied ${weightKg} kg from direct, length-qualified master candidate (${Math.round(confidence * 100)}% confidence).`,
+      message: `Auto-applied ${weightKg} kg; available empirical A1/A2 estimates are within ±50%.`,
     });
   }
   return { weightsByKey, appliedRows, remainingIssues, appliedCount: appliedRows.length };
