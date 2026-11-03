@@ -85,7 +85,13 @@ export function buildStandaloneFinalRigidReview(parity, config = {}, options = {
     [...collectXmlCiiWeightMatchRows(xmlText, options.stagedJsonText || '', config), ...(parity?.nodeRows || [])],
     config?.weight?.masterRows || [],
   );
-  const issues = audit.rows.filter(isReviewRequired).map((row) => edgeReviewIssue(row, parity?.nodeRows));
+  // Optional inspector in Output / Run is deliberately broader than the
+  // export blocker: it shows every positive physical RIGID element (including
+  // empirically normal 19.1 mm edges) without changing the release policy.
+  const selectedRows = options.includeAllPositiveMasses
+    ? audit.rows
+    : audit.rows.filter(isReviewRequired);
+  const issues = selectedRows.map((row) => edgeReviewIssue(row, parity?.nodeRows));
   const byKey = new Map(issues.map((issue) => [issue.key, issue]));
   for (const row of parity?.reviewProposals || []) {
     const proposal = proposalIssue(row, parity?.nodeRows);
