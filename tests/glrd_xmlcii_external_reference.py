@@ -59,7 +59,55 @@ def read_coords(cii):
     assert count == len(rows), "COORDS has duplicate node numbers"
     return rows
 
-def run_one(source, target, kind, out, scale):
+def linelist_config(workbook):
+    # Read the referenced workbook in place; no fixture rows are committed.
+    import re
+    from zipfile import ZipFile
+    with ZipFile(workbook) as archive:
+        strings = ["".join(node.itertext()) for node in
+                   ET.fromstring(archive.read("xl/sharedStrings.xml"))]
+        sheet = ET.fromstring(archive.read("xl/worksheets/sheet3.xml"))
+        ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        rows = []
+        for node in sheet.findall(".//m:sheetData/m:row", ns):
+            if int(node.attrib.get("r", "0")) < 9:
+                continue
+            cells = {}
+            for cell in node.findall("m:c", ns):
+                value = cell.find("m:v", ns)
+                if value is None:
+                    continue
+                col = re.match(r"[A-Z]+", cell.attrib["r"]).group()
+                cells[col] = strings[int(value.text)] if cell.attrib.get("t") == "s" else value.text
+            service, line_no = cells.get("B", ""), cells.get("C", "")
+            if not service or not line_no:
+                continue
+            rows.append({
+                "lineNo": f"{service}{line_no}",
+                "Operating Pressure": cells.get("K", ""),
+                "Operating Temperature": cells.get("L", ""),
+                "Density Gas": cells.get("M", ""),
+                "Density Liquid": cells.get("N", ""),
+                "Density Mixed": cells.get("O", ""),
+                "Design Temp Max": cells.get("Y", ""),
+                "Design Temp Min": cells.get("Z", ""),
+                "Hydro Test Pressure": cells.get("AF", ""),
+                "Insulation Thickness": cells.get("AC", ""),
+                "Piping Class": cells.get("V", ""),
+                "Size": cells.get("U", ""),
+            })
+    assert rows, "Line-list workbook has no engineering rows"
+    assert any(r["lineNo"] == "B4110011" for r in rows), "Node 460 line missing from line list"
+    return {"linelist": {"masterRows": rows, "lineKeyTokenPositions": "4",
+            "fieldMap": {"lineSeqNo": "lineNo", "lineNo": "lineNo",
+                         "p1": "Operating Pressure", "t1": "Design Temp Max",
+                         "t2": "Operating Temperature", "t3": "Design Temp Min",
+                         "densityMixed": "Density Mixed",
+                         "hydroPressure": "Hydro Test Pressure",
+                         "insThk": "Insulation Thickness"}}}
+
+
+def run_one(source, target, kind, out, scale, staged, config):
     out.mkdir(parents=True, exist_ok=True)
     input_path = source
     if kind == "reviewed":
@@ -96,6 +144,10 @@ def run_one(source, target, kind, out, scale):
     sys.argv = ["xml_to_cii2019_runtime_custody.py", "--input", str(input_path),
                 "--output", str(cii_path), "--coords-mode", "first",
                 "--weight-scale", str(scale), "--split-condensed-valve-flange"]
+    if staged is not None and staged.stat().st_size:
+        sys.argv.extend(["--staged-json", str(staged)])
+    if config:
+        sys.argv.extend(["--support-config-json", json.dumps(config)])
     try:
         runtime.main()
     finally:
@@ -122,10 +174,13 @@ def main():
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--label", default="baseline")
     parser.add_argument("--weight-scale", type=float, default=10)
+    parser.add_argument("--staged", type=Path)
+    parser.add_argument("--linelist", type=Path)
     args = parser.parse_args()
     folder = args.out / args.label
-    raw = run_one(args.source, folder, "raw", folder, args.weight_scale)
-    reviewed = run_one(args.source, folder, "reviewed", folder, args.weight_scale)
+    config = linelist_config(args.linelist) if args.linelist else {}
+    raw = run_one(args.source, folder, "raw", folder, args.weight_scale, args.staged, config)
+    reviewed = run_one(args.source, folder, "reviewed", folder, args.weight_scale, args.staged, config)
     summary = {"label": args.label, "raw": {k: raw[k] for k in ("edgeCount", "rigidEdgeCount", "restraintCount")},
                "reviewed": {k: reviewed[k] for k in ("edgeCount", "rigidEdgeCount", "restraintCount")},
                "node10CoordsRaw": raw["coords"].get("10"),

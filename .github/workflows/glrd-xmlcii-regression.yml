@@ -31,10 +31,10 @@ jobs:
         run: |
           git worktree add --detach /tmp/glrd-main origin/main
           cp tests/glrd_xmlcii_external_reference.py /tmp/glrd-main/tests/glrd_xmlcii_external_reference.py
-          python3 /tmp/glrd-main/tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-reference/GLRD-1000-PSI-02.xml --out /tmp/glrd-replay --label main-before
+          python3 /tmp/glrd-main/tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-reference/GLRD-1000-PSI-02.xml --staged /tmp/glrd-reference/stage.json --linelist /tmp/glrd-reference/linelist.xlsx --out /tmp/glrd-replay --label main-before
       - name: Recreate enriched XML with fixed PR branch
         run: |
-          python3 tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-reference/GLRD-1000-PSI-02.xml --out /tmp/glrd-replay --label pr-after
+          python3 tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-reference/GLRD-1000-PSI-02.xml --staged /tmp/glrd-reference/stage.json --linelist /tmp/glrd-reference/linelist.xlsx --out /tmp/glrd-replay --label pr-after
       - name: Compare outputs and enforce no unrelated changes
         run: |
           python3 tests/glrd_xmlcii_external_compare.py --before /tmp/glrd-replay/main-before --after /tmp/glrd-replay/pr-after --out /tmp/glrd-replay/diff
