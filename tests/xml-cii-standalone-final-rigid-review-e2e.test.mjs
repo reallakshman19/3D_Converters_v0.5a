@@ -5,6 +5,7 @@ import { mappedNodeWeights } from '../tabs/xml-cii-2019-standalone/xml-cii-stand
 import { openStandaloneFinalRigidWeightReviewPopup } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-final-rigid-weight-popup.js';
 import { collectModeARigidWeightReviewIssues } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-rigid-review-mode-a.js';
 import { createEmpiricalWeightValidator } from '../converters/empirical-weight/empirical-weight-validation.js';
+import { buildStandaloneFinalRigidReview } from '../tabs/xml-cii-2019-standalone/xml-cii-final-rigid-weight-review-gate.js';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {url:'https://example.test/3d-converters'});
 globalThis.window=dom.window;
@@ -79,6 +80,8 @@ const within=validator.validate(empiricalInput,{abnormalityThresholdPct:50});
 assert.equal(within.reportableAbnormality,false);
 assert.equal(within.approach1.available,true);
 
+const diagnostic = buildStandaloneFinalRigidReview(parity(enriched(15)),{weight:{masterRows:[]}}, {kgToNewton:true});
+console.log('DEBUG final empirical', JSON.stringify({issue:diagnostic.issues[0], audit:diagnostic.audit.rows[0]?.empiricalEvidence}));
 const valid=await runWith(enriched(15));
 assert.equal(valid.result.ok,true,`empirically normal 15kg must run without popup: ${valid.result.error}; audit=${JSON.stringify(valid.result.diagnostics?.finalRigidWeightAudit?.rows || [])}`);
 assert.equal(valid.captured.engineCalls,1);
