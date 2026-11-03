@@ -208,6 +208,22 @@ if (args.enriched) {
   writeFileSync(resolve(directory, 'GLRD-weight-split-before-enriched.xml'), legacy?.xmlText || recorded.xml);
   writeFileSync(resolve(directory, 'GLRD-weight-split-after-enriched.xml'), revised.xmlText);
   writeFileSync(resolve(directory, 'GLRD-weight-split-before-after-diff.json'), JSON.stringify(report, null, 2) + '\n');
+  const survivingSplit = `<PipeStressExport><Pipe><Branch><Branchname>VALID-SYNTHETIC-SPLIT</Branchname>
+  <Node><NodeNumber>930</NodeNumber><ComponentType>PIPE</ComponentType><Position>0 0 0</Position><Weight>0</Weight></Node>
+  <Node><NodeNumber>939</NodeNumber><ComponentType>RIGID</ComponentType><Rigid>2</Rigid><Endpoint>1</Endpoint><ComponentRefNo>=TEST-SPLIT</ComponentRefNo><Position>89.9 0 0</Position><Weight>0</Weight></Node>
+  <Node><NodeNumber>10020</NodeNumber><ComponentType>RIGID</ComponentType><Rigid>2</Rigid><Endpoint>2</Endpoint><ComponentRefNo>=TEST-SPLIT</ComponentRefNo><Position>109 0 0</Position><Weight>15</Weight></Node>
+  </Branch></Pipe></PipeStressExport>`;
+  const syntheticFixed = applyXmlCiiSplitRigidWeightPropagation(survivingSplit);
+  assert.equal(syntheticFixed.xmlText, survivingSplit);
+  assert.equal(syntheticFixed.appliedCount, 0);
+  if (args['old-module']) {
+    const old = await import(pathToFileURL(resolve(args['old-module'])).href);
+    const syntheticLegacy = old.applyXmlCiiSplitRigidWeightPropagation(survivingSplit);
+    assert.equal(syntheticLegacy.appliedCount, 1);
+    assert.ok(syntheticLegacy.xmlText.includes('<Weight>15</Weight>'));
+    writeFileSync(resolve(directory, 'SYNTHETIC-surviving-rigid-before.xml'), syntheticLegacy.xmlText);
+    writeFileSync(resolve(directory, 'SYNTHETIC-surviving-rigid-after.xml'), syntheticFixed.xmlText);
+  }
   console.log('GLRD_SPLIT_MASS_REPRO', JSON.stringify(report));
 }
 console.log('RIGID_SPLIT_MASS_TEST_PASS');
