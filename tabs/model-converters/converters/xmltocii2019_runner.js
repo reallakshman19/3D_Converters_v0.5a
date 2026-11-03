@@ -234,13 +234,22 @@ export async function run(context) {
 
   const splitWeightPropagation = applyXmlCiiSplitRigidWeightPropagation(enriched.xmlText, { config: enriched.config });
   enriched.stats = { ...(enriched.stats || {}), ...(splitWeightPropagation.stats || {}) };
+  // Structural observations matter even when no XML weights were rewritten.
+  enriched.diagnostics.push(...(splitWeightPropagation.diagnostics || []));
+  if (splitWeightPropagation.ownershipIssues?.length) {
+    const first = splitWeightPropagation.ownershipIssues[0];
+    throw new Error(
+      `RIGID physical mass ownership unresolved for ${splitWeightPropagation.ownershipIssues.length} split component group(s). ` +
+      `Example: ${first.branchName} / ${first.componentRefNo}, ${first.reason}. ` +
+      'CII export blocked; correct the component ownership rather than copying weights to siblings.'
+    );
+  }
   if (splitWeightPropagation.appliedCount > 0) {
     enriched.xmlText = splitWeightPropagation.xmlText;
     enriched.stats.weightAnnotations = (enriched.stats.weightAnnotations || 0) + splitWeightPropagation.appliedCount;
-    enriched.diagnostics.push(...(splitWeightPropagation.diagnostics || []));
   }
   rigidReviewLogLines.push(`OutsideDiameter resolver: resolved ${outsideDiameter.appliedCount || 0}; unresolved ${outsideDiameter.unresolvedCount || 0}.`);
-  rigidReviewLogLines.push(`Split rigid weight propagation: ${splitWeightPropagation.appliedCount || 0} sibling node(s).`);
+  rigidReviewLogLines.push(`Split rigid mass custody: ${splitWeightPropagation.stats?.splitRigidWeightOwnerCandidatesPreserved || 0} single-owner candidate(s) preserved; ${splitWeightPropagation.stats?.splitRigidWeightOwnershipIssues || 0} conflict(s); no sibling mass copied.`);
   const finalRigidWeightAudit = validateXmlCiiFinalRigidWeightAudit(
     auditXmlCiiRigidWeightsForExport(enriched.xmlText, {
       propagationRows: splitWeightPropagation.appliedRows,
