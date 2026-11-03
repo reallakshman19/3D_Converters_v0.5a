@@ -170,7 +170,12 @@ const EXPRESSION=String.raw`(async()=>{
   const finalResult=execute('rating+rerank',()=>rating.applyPreviewRatingAuthority({xmlText:xml,config,stagedJsonText:staged,result:materialResult,previewCache:cache}));
   stage='done';
   const stagedPreviewText=JSON.stringify(finalResult);
-  const stagedConfigText=JSON.stringify(config);
+  function canonicalData(value){
+    if(Array.isArray(value))return value.map(canonicalData);
+    if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonicalData(value[key])]));
+    return value;
+  }
+  const stagedConfigText=JSON.stringify(canonicalData(config));
   const start=performance.now();
   const originalWrapper=wrapper.xmlCiiDryRunPreview(xml,virginConfig,staged);
   const originalWrapperMs=performance.now()-start;
@@ -179,7 +184,7 @@ const EXPRESSION=String.raw`(async()=>{
   if(!sameWithinRevision)throw Error('Stage instrumentation changed complete Preview JSON within same revision');
   return {mode,previewText:stagedPreviewText,sameWithinRevision,
     stageTimes:stages,initialConfig,afterConfig:configSummary(),
-    postConfigMatchesWrapper:stagedConfigText===JSON.stringify(virginConfig),
+    postConfigMatchesWrapper:stagedConfigText===JSON.stringify(canonicalData(virginConfig)),
     totalWriteAttempts:writes.length,totalChangedWrites:writes.filter(w=>w.changed).length,
     writesByStage:stages.map(s=>({stage:s.name,count:s.writeAttempts,changed:s.changedWriteCount})),
     cacheStats:cache?cache.stats:null,
