@@ -1,6 +1,7 @@
 import { resolveStandaloneWeightReviewRating, standaloneWeightReviewRatingInfo } from './xml-cii-adapted-weight-rating-authority.js';
 import { collectXmlCiiZeroRigidWeightIssues, collectXmlCiiWeightMatchRows, xmlCiiRigidWeightOverrideKey } from '../../../converters/xml-cii2019-core/weight-match-model.js';
 import { auditXmlCiiRigidWeightsForExport } from '../../../converters/xml-cii2019-core/rigid-weight-export-audit.js';
+import { validateXmlCiiFinalRigidWeightAudit } from '../../../converters/xml-cii2019-core/rigid-weight-final-validation.js';
 import { applyXmlCiiFlangeWeightFallbackToIssue } from '../../../converters/xml-cii2019-core/flange-weight-fallback.js';
 import { rankXmlCiiWeightCandidates } from '../../../converters/xml-cii2019-core/weight-valve-hints.js';
 import { qualifiedXmlCiiRigidAutoWeightCandidate } from '../../../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
@@ -36,12 +37,17 @@ export async function collectModeARigidWeightReviewIssues(state = {}, config = {
       rejectedCandidates: ranking.rejectedCandidates.slice(0, 3),
     }, config);
   }).filter((issue) => !issue.mapped);
-  // Include suspicious *positive* masses in the existing consolidated gate,
+  // Include empirical-deviant *positive* masses in the existing consolidated gate,
   // rather than showing only zero-weight rows. Late parity-generated weights
   // are separately enforced by the mandatory final CII-input dialog.
   const xml = state.sourceText || '';
   const previewRows = collectXmlCiiWeightMatchRows(xml, state.stagedJsonText || '', config);
-  const flagged = auditXmlCiiRigidWeightsForExport(xml, { kgToNewton: state.options?.kgToNewton !== false }).flagged;
+  const checked = validateXmlCiiFinalRigidWeightAudit(
+    auditXmlCiiRigidWeightsForExport(xml, { kgToNewton: state.options?.kgToNewton !== false }),
+    previewRows, config?.weight?.masterRows || [],
+  );
+  const flagged = checked.rows.filter((edge) =>
+    edge.empiricalEvidence?.reportableAbnormality || edge.empiricalStatus === 'UNVALIDATED');
   const already = new Set(zeroWeightIssues.map((issue) => issue.key));
   const positiveWeightIssues = flagged.map((edge) => {
     const match = previewRows.find((row) =>
@@ -57,7 +63,8 @@ export async function collectModeARigidWeightReviewIssues(state = {}, config = {
       fromNode: edge.fromNode, toNode: edge.toNode,
       lengthMm: edge.elementLengthMm, weight: edge.massKg, mapped: true,
       boreMm: edge.boreMm, rating: edge.rating,
-      finalWeightReview: true, reviewFlags: edge.reviewFlags,
+      finalWeightReview: true, reviewFlags: edge.reviewFlags.filter((flag) => flag.startsWith('EMPIRICAL_')),
+      empiricalEvidence: edge.empiricalEvidence,
       candidates: match?.candidates || [],
     };
   }).filter((issue) => !already.has(issue.key));
@@ -96,7 +103,7 @@ function rowMarkup(issue, rowIndex) {
     <td title="${attr(issue.branchName)}" style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);min-width:260px;">${esc(issue.branchName)}</td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);">${esc(issue.boreMm == null ? '' : `${Number(issue.boreMm).toFixed(0)} mm`)}</td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);"><input type="text" class="mc-rigid-review-rating-input" data-review-id="${attr(issue.reviewId)}" data-source-id="${attr(issue.sourceId)}" data-issue-key="${attr(issue.key)}" value="${attr(info.shownRating)}" title="${attr(info.title)}" style="width:64px;background:#101827;color:#fff;border:1px solid ${info.conflict || info.missingWithDtxr ? '#ef4444' : '#31455f'};border-radius:4px;padding:4px;font-size:11px;">${badge}</td>
-    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);">${esc(issue.fromNode ? `${issue.fromNode} → ${issue.toNode}` : (issue.nodeNumberDisplay || issue.nodeNumber))}${issue.finalWeightReview ? '<div style="color:#fbbf24;font-size:10px;">Positive mass needs review</div>' : ''}</td>
+    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);">${esc(issue.fromNode ? `${issue.fromNode} → ${issue.toNode}` : (issue.nodeNumberDisplay || issue.nodeNumber))}${issue.finalWeightReview ? '<div style="color:#fbbf24;font-size:10px;">Empirical mass review</div>' : ''}</td>
     <td title="${attr(issue.dtxrSourcePath || '')}" style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);min-width:180px;">${esc(issue.dtxr || 'Not found')}</td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);white-space:nowrap;">${esc(issue.lengthMm == null ? '' : `${Number(issue.lengthMm).toFixed(1)} mm`)}${issue.finalWeightReview ? `<div style="color:#fbbf24;font-size:10px;white-space:normal;">${esc(issue.reviewFlags.join('; '))}</div>` : ''}</td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);"><input type="number" min="0" step="0.001" class="mc-rigid-review-input" data-review-id="${attr(issue.reviewId)}" data-source-id="${attr(issue.sourceId)}" data-issue-key="${attr(issue.key)}" value="${attr(issue.finalWeightReview ? issue.weight : (safe?.weightKg ?? ''))}" placeholder="kg" style="width:78px;background:#101827;color:#fff;border:1px solid #31455f;border-radius:4px;padding:4px;"></td>
@@ -111,12 +118,12 @@ function popupMarkup(rows, entries) {
       <div><div style="font-size:18px;font-weight:700;color:#9cc5ff;">Rigid Weights Need Review — Consolidated</div><div data-mode-a-rigid-summary style="font-size:12px;color:#94a3b8;margin-top:4px;">${rows.length} rigid node(s) across ${entries.length} XML file(s).</div></div>
       <button type="button" data-mode-a-rigid-cancel style="cursor:pointer;background:transparent;border:1px solid #475569;border-radius:6px;color:#94a3b8;padding:6px 12px;">Cancel Batch Run</button>
     </div>
-    <div style="background:#2a210b;border:1px solid #7c5a18;color:#ffe7a3;padding:9px;border-radius:6px;font-size:12px;margin-bottom:10px;">One early review gate covers zero-weight and existing suspicious positive-weight assignments for all enabled XML models. New weights created during final enrichment trigger an additional mandatory final-export review. Source identity is preserved; Rating and Weight changes are written only to that XML. “Use All Safe Suggestions (60–100%)” fills only direct master candidates with a verified rating, bore and component length. Inferred or lower-confidence suggestions require review. Enter mass in kg; the optional kg→N CII export conversion applies ×10 only at output.</div>
+    <div style="background:#2a210b;border:1px solid #7c5a18;color:#ffe7a3;padding:9px;border-radius:6px;font-size:12px;margin-bottom:10px;">One early review gate covers zero-weight and empirically deviant positive-weight assignments for all enabled XML models. New weights created during final enrichment trigger an additional mandatory final-export review. Source identity is preserved; Rating and Weight changes are written only to that XML. “Use Empirically Validated Suggestions (±50%)” fills only candidates whose available A1/A2 estimates are within ±50%; unavailable estimates require review. Enter mass in kg; the optional kg→N CII export conversion applies ×10 only at output.</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
       <input type="search" data-mode-a-rigid-search placeholder="Search source / branch / node..." style="min-width:250px;padding:6px;background:#0b1220;color:#e2e8f0;border:1px solid #475569;border-radius:5px;">
       <select data-mode-a-rigid-source style="padding:6px;background:#0b1220;color:#e2e8f0;border:1px solid #475569;border-radius:5px;"><option value="">All XML files</option>${sourceOptions}</select>
       <button type="button" data-mode-a-rigid-refresh style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:7px 12px;">Refresh Suggestions</button>
-      <button type="button" data-mode-a-rigid-fill-exact style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:7px 12px;">Use All Safe Suggestions (60–100%)</button>
+      <button type="button" data-mode-a-rigid-fill-exact style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:7px 12px;">Use Empirically Validated Suggestions (±50%)</button>
       <span data-mode-a-rigid-status style="font-size:12px;color:#94a3b8;"></span>
     </div>
     <div style="overflow:auto;max-height:55vh;border:1px solid rgba(148,163,184,.15);border-radius:6px;"><table style="border-collapse:collapse;font-size:12px;width:100%;text-align:left;"><thead><tr style="background:rgba(30,41,59,.55);color:#fff;position:sticky;top:0;z-index:1;"><th style="padding:7px;">Source XML</th><th style="padding:7px;">Branch</th><th style="padding:7px;">Bore</th><th style="padding:7px;">Rating</th><th style="padding:7px;">Node</th><th style="padding:7px;">DTXR</th><th style="padding:7px;">Length</th><th style="padding:7px;">Manual Weight (kg)</th><th style="padding:7px;">Nearest Suggestions</th></tr></thead><tbody data-mode-a-rigid-body>${rows.map(rowMarkup).join('')}</tbody></table></div>
@@ -188,7 +195,7 @@ export function openModeAConsolidatedRigidWeightReviewPopup(entries = []) {
         const input = overlay.querySelectorAll('.mc-rigid-review-input')[index];
         if (input) { input.value = String(value); count += 1; }
       });
-      setStatus(`Filled ${count} qualified 60–100% direct suggestions; low-confidence, inferred, and length-mismatched weights remain for manual review.`, false);
+      setStatus(`Filled ${count} empirically validated suggestions; A1/A2 deviations above ±50% or unavailable estimates remain for manual review.`, false);
     });
 
     overlay.querySelector('[data-mode-a-rigid-refresh]')?.addEventListener('click', async () => {
