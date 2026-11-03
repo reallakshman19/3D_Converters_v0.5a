@@ -4,6 +4,7 @@ import { xmlCiiDryRunPreview as buildCorePreview } from './xml-cii-adapted-previ
 import { applyPreviewBoreWallAuthority } from './xml-cii-adapted-preview-bore-wall-authority.js';
 import { applyPreviewMaterialCodeAuthority } from './xml-cii-adapted-preview-material-authority.js';
 import { applyPreviewRatingAuthority } from './xml-cii-adapted-preview-rating-authority.js';
+import { createPreviewPerBuildCache } from './xml-cii-adapted-preview-per-build-cache.js';
 
 const AUTOMATIC_LINE_MATCH_METHODS = new Set(['similar-lineseq', 'similar-linekey']);
 const LINE_AUTHORITY_VERSION = 'strict-explicit-or-exact-v1';
@@ -115,7 +116,7 @@ export function buildStrictLineAuthorityCorePreview(
   const fragmentBuilder = typeof runtime.branchFragments === 'function'
     ? runtime.branchFragments
     : browserBranchFragments;
-  const coreResult = build(xmlText, config, stagedJsonText) || {};
+  const coreResult = build(xmlText, config, stagedJsonText, runtime.previewCache) || {};
   const branchRows = Array.isArray(coreResult.branchRows)
     ? coreResult.branchRows.map((row) => ({ ...row }))
     : [];
@@ -135,7 +136,7 @@ export function buildStrictLineAuthorityCorePreview(
     let replacement = null;
     let replacementNodes = [];
     if (fragment?.xmlText) {
-      const rebuilt = build(fragment.xmlText, strictConfig, stagedJsonText) || {};
+      const rebuilt = build(fragment.xmlText, strictConfig, stagedJsonText, runtime.previewCache) || {};
       replacement = Array.isArray(rebuilt.branchRows) ? rebuilt.branchRows[0] : null;
       replacementNodes = Array.isArray(rebuilt.nodeRows) ? rebuilt.nodeRows : [];
     }
@@ -180,7 +181,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 }
 
 export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
-  const coreResult = buildStrictLineAuthorityCorePreview(xmlText, config, stagedJsonText);
+  const previewCache = createPreviewPerBuildCache();
+  const coreResult = buildStrictLineAuthorityCorePreview(xmlText, config, stagedJsonText, { previewCache });
   const wallResult = applyPreviewBoreWallAuthority({
     xmlText,
     config,
@@ -196,5 +198,6 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
     config,
     stagedJsonText,
     result: materialResult,
+    previewCache,
   });
 }
