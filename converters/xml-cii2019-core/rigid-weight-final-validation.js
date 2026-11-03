@@ -18,9 +18,12 @@ function target(candidate = {}) {
     ? 'BW KG' : 'RF/RTJ KG';
 }
 function matchingIssue(auditRow, issues) {
-  return issues.find((row) => text(row.branchName) === text(auditRow.branchName)
+  const matches = issues.filter((row) => text(row.branchName) === text(auditRow.branchName)
     && text(row.nodeNumber) === text(auditRow.toNode)
-    && normalizeRef(row.componentRefNo) === normalizeRef(auditRow.componentRefNo)) || null;
+    && normalizeRef(row.componentRefNo) === normalizeRef(auditRow.componentRefNo));
+  return matches.find((row) => row.candidates?.some((candidate) => candidate.rowData))
+    || matches.find((row) => row.weightMatch?.rowData)
+    || matches[0] || null;
 }
 export function xmlCiiEmpiricalWeightValidationInput(auditRow, issue) {
   const candidates = [
@@ -37,7 +40,7 @@ export function xmlCiiEmpiricalWeightValidationInput(auditRow, issue) {
     source: auditRow.weightOrigin,
     componentRefNo: auditRow.componentRefNo,
     nodeNumber: auditRow.toNode,
-    typeDesc: text(row.TypeDesc || row.typeDesc || candidate?.typeDesc || issue?.typeDesc),
+    typeDesc: text(row.TypeDesc || row.typeDesc || candidate?.typeDesc || issue?.typeDesc || auditRow.nodeName),
     ns: row.NS ?? row.ns ?? issue?.ns,
     dn: auditRow.boreMm ?? issue?.boreMm,
     rating: auditRow.rating || issue?.rating,
