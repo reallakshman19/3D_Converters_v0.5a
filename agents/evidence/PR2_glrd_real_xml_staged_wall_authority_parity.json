@@ -1,0 +1,81 @@
+{
+  "status": "PASS",
+  "scope": "ACTUAL external GLRD XML and staged JSON, actual before/after wall authority, real vendored PipeData and DTXR resolver; minimal DOM adapter and constructed preview-row inputs; NOT full Step 4 pipeline/export",
+  "branchCount": 30,
+  "nodeCount": 1224,
+  "stagedTopLevelItems": 86,
+  "realNamed": true,
+  "oldWallBlob": "04ff82f24dfa9e7a112c17228d1fe24de0b32a55",
+  "newWallBlob": "00927d9b7bd55adecb97ea421e9fc2a610245071",
+  "oldBoreBlob": "0e1da4b804770864f84f388169780cf1c1903708",
+  "newBoreBlob": "af85d0f7b9866d1348a1fca5672acc0faa61db54",
+  "oldWallMs": 1018,
+  "newWallMs": 535,
+  "oldStagedJsonParses": 30,
+  "newStagedJsonParses": 1,
+  "completeBranchAndNodeRowsEqual": true,
+  "jsonLength": 790539,
+  "firstDifferenceAt": -1,
+  "firstDifferenceSnippet": null,
+  "selected": [
+    {
+      "branch": "/GLRD-1000-4\"-P4110001-93833-01/B6",
+      "wall": "6.02",
+      "source": "pipe-data-db",
+      "evidenceCount": 66,
+      "selected": "FLAN",
+      "rejected": 58
+    },
+    {
+      "branch": "/GLRD-1000-4\"-P4110001-93833-01/B2",
+      "wall": "6.02",
+      "source": "pipe-data-db",
+      "evidenceCount": 66,
+      "selected": "FLAN",
+      "rejected": 58
+    },
+    {
+      "branch": "/GLRD-1000-2\"-B4110011-93833-01/B1",
+      "wall": "3.91",
+      "source": "asme-b36.10-common-fallback",
+      "evidenceCount": 27,
+      "selected": "FLAN",
+      "rejected": 19
+    },
+    {
+      "branch": "/GLRD-1000-2\"-P4110003-93833-01/B2",
+      "wall": "3.91",
+      "source": "asme-b36.10-common-fallback",
+      "evidenceCount": 65,
+      "selected": "FLAN",
+      "rejected": 55
+    }
+  ],
+  "nodeCanary": [
+    {
+      "branch": "/GLRD-1000-4\"-P4110001-93833-01/B6",
+      "nodeNumber": "10",
+      "boreMm": 200,
+      "ref": "=134234934/21557"
+    },
+    {
+      "branch": "/GLRD-1000-2\"-B4110011-93833-01/B1",
+      "nodeNumber": "460",
+      "boreMm": 50,
+      "ref": "=134234934/27950"
+    }
+  ],
+  "structuredEvidenceRecords": 1279,
+  "externalReferencePinnedCommit": "3377b7f4baeeee5851e72dcc414d6c4a93f5a933",
+  "sourceXmlBlobSha": "8c60c9e58995172d48a9d1ebfa23569db5659f06",
+  "stagedJsonBlobSha": "c611f53d6571cae7df51d9ac817a723be493b952",
+  "stagedJsonSha256": "1d2469fe05d712cd1dd2da9913a840516ae686fb1616eb6d7b5e14d8918e2746",
+  "baseCommit": "a3b3d7e329686ceff419d2399ee153986bcab23f",
+  "sourceFixtureAuthority": "exact external GLRD XML and staged JSON contents; source XML DOM minimally adapted to childNode/localName APIs; branch/node input rows constructed to isolate wall/bore authority; not full preview",
+  "outputParityKind": "deep JSON.stringify equality over every baseline/optimized branchRow and nodeRow",
+  "otherStagesExecuted": [
+    "real DTXR wall thickness resolver",
+    "real wall evidence ledger",
+    "real vendored PipeDataDb"
+  ]
+}

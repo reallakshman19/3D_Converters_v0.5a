@@ -149,27 +149,42 @@ function walkStaged(value, branchName, out) {
   }
 }
 
-export function collectStagedBranchWallEvidence(stagedJsonText, branchName) {
+/** Index staged branch wall facts once, preserving walk order and duplicates. */
+export function indexStagedBranchWallEvidence(stagedJsonText) {
   let parsed;
   try {
     parsed = typeof stagedJsonText === 'string'
       ? JSON.parse(stagedJsonText) : stagedJsonText;
   } catch {
-    return [];
+    return new Map();
   }
   const items = [];
   walkStaged(parsed, '', items);
-  const root = canonicalBranch(branchName);
-  return items.flatMap(({ value, attrs, type, branchName: owner }) => {
-    if (!root || canonicalBranch(owner) !== root || type === 'BRANCH') return [];
+  const index = new Map();
+  for (const { value, attrs, type, branchName: owner } of items) {
+    const root = canonicalBranch(owner);
+    if (!root || type === 'BRANCH') continue;
     const dtxr = attr(attrs, ['DTXR_POS', 'DTXR', 'DESC', 'DESCRIPTION'])
       || value.name;
     const item = componentEvidence(
       type, attr(attrs, ['REF', 'NAME']), stagedBoreMm(attrs),
       dtxr, 'staged-json',
     );
-    return item ? [item] : [];
-  });
+    if (!item) continue;
+    if (!index.has(root)) index.set(root, []);
+    index.get(root).push(item);
+  }
+  return index;
+}
+
+export function collectIndexedStagedBranchWallEvidence(index, branchName) {
+  return index?.get(canonicalBranch(branchName)) || [];
+}
+
+export function collectStagedBranchWallEvidence(stagedJsonText, branchName) {
+  return collectIndexedStagedBranchWallEvidence(
+    indexStagedBranchWallEvidence(stagedJsonText), branchName,
+  );
 }
 
 function readRow(row, keys) {

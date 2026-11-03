@@ -1,5 +1,6 @@
 import {
-  collectStagedBranchWallEvidence,
+  collectIndexedStagedBranchWallEvidence,
+  indexStagedBranchWallEvidence,
   collectXmlBranchWallEvidence,
   childText,
   children,
@@ -23,9 +24,9 @@ function classSizeKey(row, boreMm) {
     : row?.wallThicknessKey;
 }
 
-function branchDtxrWallEvidence(branch, branchName, stagedJsonText, boreMm, config) {
+function branchDtxrWallEvidence(branch, branchName, stagedEvidenceIndex, boreMm, config) {
   const evidence = [
-    ...collectStagedBranchWallEvidence(stagedJsonText, branchName),
+    ...collectIndexedStagedBranchWallEvidence(stagedEvidenceIndex, branchName),
     ...collectXmlBranchWallEvidence(branch),
   ];
   return resolveXmlCiiWallThicknessWithEvidence({
@@ -35,10 +36,10 @@ function branchDtxrWallEvidence(branch, branchName, stagedJsonText, boreMm, conf
   });
 }
 
-function correctedRow(row, branch, stagedJsonText, config) {
+function correctedRow(row, branch, stagedEvidenceIndex, config) {
   const boreMm = resolveBranchNominalBore(row.branchName, row.sizeMm, config);
   const dtxr = branchDtxrWallEvidence(
-    branch, row.branchName, stagedJsonText, boreMm, config,
+    branch, row.branchName, stagedEvidenceIndex, boreMm, config,
   );
   const classWall = findExactClassWall(
     config, row.pipingClass || row.pipingClassDerived, boreMm,
@@ -126,8 +127,9 @@ export function applyPreviewBoreWallAuthority({
   const document = parseXml(xmlText);
   if (!document) return result;
   const branches = branchMap(document);
+  const stagedEvidenceIndex = indexStagedBranchWallEvidence(stagedJsonText);
   const branchRows = result.branchRows.map((row) => correctedRow(
-    row, branches.get(row.branchName), stagedJsonText, config,
+    row, branches.get(row.branchName), stagedEvidenceIndex, config,
   ));
   return {
     ...result,

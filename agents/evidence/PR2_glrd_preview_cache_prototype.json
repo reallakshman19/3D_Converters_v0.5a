@@ -1,0 +1,20 @@
+{
+  "status": "PASS",
+  "scope": "Isolated Phase2 candidate prototype, no source mutation/commit. Exact per-build ranking-input memoization + class-index cache on same master array identity. Real GLRD XML/stage, full historical class/weight masters, reconstructed exact GLRD line keys, custom DOM, NOT browser/export",
+  "beforeMs": 17361,
+  "afterMs": 11161,
+  "speedup": 1.5555057790520563,
+  "resultsByteIdentical": true,
+  "previewBranches": 30,
+  "previewNodeRows": 269,
+  "serializedChars": 1428075,
+  "prototypeStats": {
+    "classBuilds": 1,
+    "classHits": 1,
+    "rankComputes": 341,
+    "rankHits": 197
+  },
+  "firstDiffAt": -1,
+  "beforeExcerpt": null,
+  "afterExcerpt": null
+}
