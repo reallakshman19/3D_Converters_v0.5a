@@ -140,11 +140,64 @@ jobs:
             tests/xml-cii-bore-wall-authority.test.mjs \
             tests/xml-cii-preview-strict-line-authority.test.mjs
           python3 tests/test_glrd_phase4_enriched_parity.py -v
+      - name: Checkout pinned separate Phase 2 per-build reuse candidate
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/phase2-candidate
+          git -C /tmp/glrd/phase2-candidate checkout --detach d8b9da2bcbb2e676309b0d48e731697d65ec4010
+          test "$(git -C /tmp/glrd/phase2-candidate rev-parse HEAD)" = "d8b9da2bcbb2e676309b0d48e731697d65ec4010"
+          test -z "$(git -C /tmp/glrd/phase2-candidate status --porcelain --untracked-files=no)"
+      - name: Capture Phase 2 Chromium Preview and downstream enriched XML
+        run: |
+          mkdir -p /tmp/glrd/phase2-output
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          node tests/glrd_phase4_browser_export_capture.mjs \
+            --root /tmp/glrd/phase2-candidate \
+            --xml /tmp/glrd/input/source.xml \
+            --staged /tmp/glrd/input/staged.json \
+            --config /tmp/glrd/input/config.json \
+            --linelist /tmp/glrd/input/linelist.xlsx \
+            --piping-class /tmp/glrd/input/piping-class.json \
+            --weight /tmp/glrd/input/weight.json \
+            --material-map /tmp/glrd/input/material-map.txt \
+            --out /tmp/glrd/phase2-output \
+            --label optimized \
+            --expected-sha d8b9da2bcbb2e676309b0d48e731697d65ec4010 \
+            --chromium "$CHROME_BIN"
+      - name: Enforce Phase 2 byte-identical Preview and enriched XML against PR2
+        run: |
+          set -euo pipefail
+          python3 /tmp/glrd/phase2-candidate/tests/glrd_phase4_enriched_parity.py \
+            --before /tmp/glrd/output/optimized-enriched.xml \
+            --after /tmp/glrd/phase2-output/optimized-enriched.xml \
+            --before-manifest /tmp/glrd/output/optimized-manifest.json \
+            --after-manifest /tmp/glrd/phase2-output/optimized-manifest.json \
+            --report /tmp/glrd/output/phase2-enriched-xml-diff.json
+          cmp /tmp/glrd/output/optimized-preview.json /tmp/glrd/phase2-output/optimized-preview.json
+          printf 'PHASE2 Preview JSON byte diff: ZERO\n' | tee /tmp/glrd/output/phase2-preview-diff.txt
+          test "$(sha256sum /tmp/glrd/phase2-output/optimized-enriched.xml | cut -d ' ' -f1)" = "f00da45caf73b15e930e4c91d068d8d1bebd1b9ad1452ad0d7b204af9c3a8aa2"
+          cp /tmp/glrd/phase2-output/optimized-enriched.xml /tmp/glrd/output/phase2-enriched.xml
+          cp /tmp/glrd/phase2-output/optimized-preview.json /tmp/glrd/output/phase2-preview.json
+          cp /tmp/glrd/phase2-output/optimized-manifest.json /tmp/glrd/output/phase2-manifest.json
+          cp /tmp/glrd/phase2-output/optimized-capture-report.json /tmp/glrd/output/phase2-capture-report.json
+          sha256sum /tmp/glrd/output/*enriched.xml | tee /tmp/glrd/output/all-export-sha256.txt
+      - name: Execute Phase 2 targeted native regression and cache invalidation tests
+        run: |
+          cd /tmp/glrd/phase2-candidate
+          GLRD_SOURCE_XML=/tmp/glrd/input/source.xml \
+          GLRD_STAGE_FILE=/tmp/glrd/input/staged.json \
+          GLRD_BRANCH_NAMES_FILE=/tmp/glrd/input/branch-names.json \
+          node --test \
+            tests/xml-cii-preview-per-build-cache.test.mjs \
+            tests/xml-cii-preview-wall-authority-parity.test.mjs \
+            tests/xml-cii-preview-wall-evidence-index.test.mjs \
+            tests/xml-cii-bore-wall-authority.test.mjs \
+            tests/xml-cii-preview-strict-line-authority.test.mjs
+          python3 tests/test_glrd_phase4_enriched_parity.py -v
       - name: Upload baseline and failure evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: glrd-browser-baseline-vs-pr2-verification
+          name: glrd-browser-baseline-vs-pr2-and-phase2
           path: /tmp/glrd/output/
           if-no-files-found: warn
           retention-days: 14
