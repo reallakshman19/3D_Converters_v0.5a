@@ -171,6 +171,9 @@ jobs:
           node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-final-rigid-weight-popup.js
           node --check converters/xml-cii-2019-standalone/engine.js
           node --check tabs/xml-cii-2019-standalone/xml-cii-workflow-types.js
+          node --check tabs/xml-cii-2019-standalone/xml-cii-output-run-readiness.js
+          node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-events.js
+          node tests/xml-cii-rigid-ledger-download.test.mjs
           node tests/xml-cii-rigid-complete-census.test.mjs
           node tests/xml-cii-rigid-ownership-snapshot.test.mjs
           node tests/xml-cii-rigid-direct-worker-gate.test.mjs
