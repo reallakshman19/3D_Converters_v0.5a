@@ -125,14 +125,25 @@ assert.equal(unavailable.result.ok,false,'no empirical family must not silently 
 assert.equal(unavailable.captured.engineCalls,0);
 assert.match(unavailable.result.error,/EMPIRICAL_VALIDATION_UNAVAILABLE/);
 
-const candidate={weight:15,selectedWeight:15,score:0.10,weightMethod:'length-extrapolated',
+const candidate={weight:15,selectedWeight:15,score:0.65,weightMethod:'length-extrapolated',
   typeDesc:'Weldneck Flange',rowData:{TypeDesc:'Weldneck Flange',NS:2,DN:50,Rating:900,'RF/RTJ KG':15}};
 const previewRow={key:'B-939::10020',branchName:'B-939',nodeNumber:'10020',
   componentRefNo:'=FLANGE-1',componentType:'RIGID',endpoint:'2',lengthMm:19.1,
   boreMm:50,rating:900,weightMatch:{...candidate},weightCandidates:[candidate]};
 const mapped=mappedNodeWeights([previewRow],{});
-assert.equal(mapped.weights.get('B-939|10020'),15,'normal empirical mass auto-applies regardless of length and score');
+assert.equal(mapped.weights.get('B-939|10020'),15,'65% confidence and ±50% empirical approval auto-apply independent of edge length');
 assert.equal(mapped.reviewProposals.length,0);
+const atSixty=mappedNodeWeights([{...previewRow,weightMatch:{...candidate,score:0.60},
+  weightCandidates:[{...candidate,score:0.60}]}],{});
+assert.equal(atSixty.weights.get('B-939|10020'),15,'exactly 60% confidence auto-applies when empirically valid');
+const atHundred=mappedNodeWeights([{...previewRow,weightMatch:{...candidate,score:100},
+  weightCandidates:[{...candidate,score:100}]}],{});
+assert.equal(atHundred.weights.get('B-939|10020'),15,'100% confidence is included');
+const belowSixty=mappedNodeWeights([{...previewRow,weightMatch:{...candidate,score:0.599},
+  weightCandidates:[{...candidate,score:0.599}]}],{});
+assert.equal(belowSixty.weights.size,0,'59.9% cannot silently auto-apply despite valid empirical estimate');
+assert.equal(belowSixty.reviewProposals.length,1);
+assert.ok(belowSixty.reviewProposals[0].reviewFlags.includes('AUTO_SUGGESTION_CONFIDENCE_OUTSIDE_60_TO_100_PERCENT'));
 const highProposal=mappedNodeWeights([{
   ...previewRow,weightMatch:{...candidate,weight:150,selectedWeight:150},
   weightCandidates:[{...candidate,weight:150,selectedWeight:150,score:0.99}],
@@ -174,4 +185,4 @@ const earlyGood=await collectModeARigidWeightReviewIssues(
 assert.ok(!earlyGood.some((row)=>row.fromNode==='939' && row.toNode==='10020'),
   'normal 15kg rigid edge must not be flagged merely because it is 19.1 mm');
 
-console.log('PASS actual standalone service + new empirical A1/A2 modal: ±50% high/low, normal, unknown, cancel, approve, corrected CII input, preview fallback, Mode A early gate.');
+console.log('PASS actual standalone: 60–100% confidence auto-apply + ±50% A1/A2 dialog, normal, high/low, cancel, correction, fallback, Mode A.');
