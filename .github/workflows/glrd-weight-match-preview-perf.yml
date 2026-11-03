@@ -48,9 +48,9 @@ jobs:
         run: |
           set -euo pipefail
           git show d718409659e71c7fa4fd6c5222b2a3d364682878^:converters/xml-cii2019-core/split-rigid-weight-propagation.js > /tmp/glrd-preview/results/legacy-split-rigid-weight-propagation.mjs
-          node tests/xml-cii-rigid-split-mass-custody.test.mjs \\
-            --enriched /tmp/glrd-preview/results/GLRD-enriched.xml \\
-            --old-module /tmp/glrd-preview/results/legacy-split-rigid-weight-propagation.mjs \\
+          node tests/xml-cii-rigid-split-mass-custody.test.mjs \
+            --enriched /tmp/glrd-preview/results/GLRD-enriched.xml \
+            --old-module /tmp/glrd-preview/results/legacy-split-rigid-weight-propagation.mjs \
             --out /tmp/glrd-preview/results
           python3 - <<'PY'
           import json
@@ -67,8 +67,8 @@ jobs:
             lines.append(f"  Node {row['nodeNumber']}: BEFORE {row['beforeWeightKg']} kg -> AFTER {row['afterWeightKg']} kg")
           lines.extend(['legacy SHA256: '+str(report['legacyPreFixSha256']),
              'fixed SHA256: '+str(report['correctedAfterSplitSha256'])])
-          (p/'GLRD-weight-split-diff.txt').write_text('\\n'.join(lines)+'\\n')
-          print('\\n'.join(lines))
+          (p/'GLRD-weight-split-diff.txt').write_text('\n'.join(lines)+'\n')
+          print('\n'.join(lines))
           assert report['changedRows'], 'legacy vs corrected XML must differ'
           assert report['correctedAppliedCount']==0
           PY
