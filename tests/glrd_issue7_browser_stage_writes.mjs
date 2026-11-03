@@ -208,7 +208,10 @@ async function browserCapture(files){
   chrome.stderr.on('data',chunk=>{if(stderr.length<16000)stderr+=String(chunk).slice(0,2000);});
   try{
     const ws=await browserSocket(debugPort,pagePort);
-    return await evaluate(ws,EXPRESSION);
+    const origin='http://127.0.0.1:'+pagePort;
+    const absolute=EXPRESSION.replaceAll("'/__glrd/", "'"+origin+"/__glrd/")
+      .replaceAll("'/tabs/", "'"+origin+"/tabs/");
+    return await evaluate(ws,absolute);
   }catch(e){throw Error(String(e.message||e)+'; chrome stderr='+stderr.slice(-3000));}
   finally{
     chrome.kill('SIGKILL');
