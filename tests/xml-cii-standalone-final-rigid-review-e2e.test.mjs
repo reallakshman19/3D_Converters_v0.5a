@@ -80,7 +80,7 @@ assert.equal(within.reportableAbnormality,false);
 assert.equal(within.approach1.available,true);
 
 const valid=await runWith(enriched(15));
-assert.equal(valid.result.ok,true,'empirically normal 15kg must run without popup');
+assert.equal(valid.result.ok,true,`empirically normal 15kg must run without popup: ${valid.result.error}; audit=${JSON.stringify(valid.result.diagnostics?.finalRigidWeightAudit?.rows || [])}`);
 assert.equal(valid.captured.engineCalls,1);
 assert.equal(valid.result.diagnostics.finalRigidWeightReview.reviewRequiredCount,0);
 
