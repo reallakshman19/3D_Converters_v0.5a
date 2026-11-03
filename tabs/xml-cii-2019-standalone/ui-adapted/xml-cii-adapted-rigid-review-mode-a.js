@@ -1,5 +1,6 @@
 import { resolveStandaloneWeightReviewRating, standaloneWeightReviewRatingInfo } from './xml-cii-adapted-weight-rating-authority.js';
-import { collectXmlCiiZeroRigidWeightIssues } from '../../../converters/xml-cii2019-core/weight-match-model.js';
+import { collectXmlCiiZeroRigidWeightIssues, collectXmlCiiWeightMatchRows, xmlCiiRigidWeightOverrideKey } from '../../../converters/xml-cii2019-core/weight-match-model.js';
+import { auditXmlCiiRigidWeightsForExport } from '../../../converters/xml-cii2019-core/rigid-weight-export-audit.js';
 import { applyXmlCiiFlangeWeightFallbackToIssue } from '../../../converters/xml-cii2019-core/flange-weight-fallback.js';
 import { rankXmlCiiWeightCandidates } from '../../../converters/xml-cii2019-core/weight-valve-hints.js';
 import { qualifiedXmlCiiRigidAutoWeightCandidate } from '../../../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
@@ -10,7 +11,7 @@ const attr = (value) => esc(value).replace(/'/g, '&#39;');
 const text = (value) => value === undefined || value === null ? '' : String(value).trim();
 
 export async function collectModeARigidWeightReviewIssues(state = {}, config = {}) {
-  return collectXmlCiiZeroRigidWeightIssues(state.sourceText || '', state.stagedJsonText || '', config).map((issue) => {
+  const zeroWeightIssues = collectXmlCiiZeroRigidWeightIssues(state.sourceText || '', state.stagedJsonText || '', config).map((issue) => {
     const authority = resolveStandaloneWeightReviewRating(issue, config);
     const rating = authority.rating;
     const ranking = rating
@@ -35,6 +36,32 @@ export async function collectModeARigidWeightReviewIssues(state = {}, config = {
       rejectedCandidates: ranking.rejectedCandidates.slice(0, 3),
     }, config);
   }).filter((issue) => !issue.mapped);
+  // Include suspicious *positive* masses in the existing consolidated gate,
+  // rather than showing only zero-weight rows. Late parity-generated weights
+  // are separately enforced by the mandatory final CII-input dialog.
+  const xml = state.sourceText || '';
+  const previewRows = collectXmlCiiWeightMatchRows(xml, state.stagedJsonText || '', config);
+  const flagged = auditXmlCiiRigidWeightsForExport(xml, { kgToNewton: state.options?.kgToNewton !== false }).flagged;
+  const already = new Set(zeroWeightIssues.map((issue) => issue.key));
+  const positiveWeightIssues = flagged.map((edge) => {
+    const match = previewRows.find((row) =>
+      text(row.branchName) === text(edge.branchName)
+      && text(row.nodeNumber) === text(edge.toNode)
+      && text(row.componentRefNo).replace(/^=/, '').toUpperCase() === text(edge.componentRefNo).toUpperCase()
+      && text(row.endpoint) === text(edge.endpoint));
+    const key = match?.key || xmlCiiRigidWeightOverrideKey(edge.branchName, edge.toNode);
+    return {
+      ...(match || {}),
+      key, branchName: edge.branchName, nodeNumber: edge.toNode, nodeNumberDisplay: edge.toNode,
+      componentType: edge.componentType, componentRefNo: edge.componentRefNo,
+      fromNode: edge.fromNode, toNode: edge.toNode,
+      lengthMm: edge.elementLengthMm, weight: edge.massKg, mapped: true,
+      boreMm: edge.boreMm, rating: edge.rating,
+      finalWeightReview: true, reviewFlags: edge.reviewFlags,
+      candidates: match?.candidates || [],
+    };
+  }).filter((issue) => !already.has(issue.key));
+  return [...zeroWeightIssues, ...positiveWeightIssues];
 }
 
 function ratingInfo(issue) {
@@ -63,16 +90,16 @@ function rowMarkup(issue, rowIndex) {
   const badge = info.conflict
     ? '<span title="Rating conflict with DTXR" style="color:#fca5a5;font-weight:700;"> !</span>'
     : (info.missingWithDtxr ? '<span title="DTXR Rating available as evidence" style="color:#fbbf24;font-weight:700;"> DTXR</span>' : '');
-  const search = [issue.fileName, issue.alias, issue.branchName, issue.nodeNumberDisplay, issue.nodeNumber, issue.dtxr].map((value) => text(value).toLowerCase()).join(' ');
+  const search = [issue.fileName, issue.alias, issue.branchName, issue.fromNode, issue.nodeNumberDisplay, issue.nodeNumber, issue.dtxr].map((value) => text(value).toLowerCase()).join(' ');
   return `<tr data-mode-a-rigid-review-row data-source-id="${attr(issue.sourceId)}" data-search="${attr(search)}">
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);white-space:nowrap;">${esc(issue.fileName || issue.alias || issue.sourceId)}</td>
     <td title="${attr(issue.branchName)}" style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);min-width:260px;">${esc(issue.branchName)}</td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);">${esc(issue.boreMm == null ? '' : `${Number(issue.boreMm).toFixed(0)} mm`)}</td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);"><input type="text" class="mc-rigid-review-rating-input" data-review-id="${attr(issue.reviewId)}" data-source-id="${attr(issue.sourceId)}" data-issue-key="${attr(issue.key)}" value="${attr(info.shownRating)}" title="${attr(info.title)}" style="width:64px;background:#101827;color:#fff;border:1px solid ${info.conflict || info.missingWithDtxr ? '#ef4444' : '#31455f'};border-radius:4px;padding:4px;font-size:11px;">${badge}</td>
-    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);">${esc(issue.nodeNumberDisplay || issue.nodeNumber)}</td>
+    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);">${esc(issue.fromNode ? `${issue.fromNode} → ${issue.toNode}` : (issue.nodeNumberDisplay || issue.nodeNumber))}${issue.finalWeightReview ? '<div style="color:#fbbf24;font-size:10px;">Positive mass needs review</div>' : ''}</td>
     <td title="${attr(issue.dtxrSourcePath || '')}" style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);min-width:180px;">${esc(issue.dtxr || 'Not found')}</td>
-    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);white-space:nowrap;">${esc(issue.lengthMm == null ? '' : `${Number(issue.lengthMm).toFixed(1)} mm`)}</td>
-    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);"><input type="number" min="0" step="0.001" class="mc-rigid-review-input" data-review-id="${attr(issue.reviewId)}" data-source-id="${attr(issue.sourceId)}" data-issue-key="${attr(issue.key)}" value="${attr(safe?.weightKg ?? '')}" placeholder="kg" style="width:78px;background:#101827;color:#fff;border:1px solid #31455f;border-radius:4px;padding:4px;"></td>
+    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);white-space:nowrap;">${esc(issue.lengthMm == null ? '' : `${Number(issue.lengthMm).toFixed(1)} mm`)}${issue.finalWeightReview ? `<div style="color:#fbbf24;font-size:10px;white-space:normal;">${esc(issue.reviewFlags.join('; '))}</div>` : ''}</td>
+    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);"><input type="number" min="0" step="0.001" class="mc-rigid-review-input" data-review-id="${attr(issue.reviewId)}" data-source-id="${attr(issue.sourceId)}" data-issue-key="${attr(issue.key)}" value="${attr(issue.finalWeightReview ? issue.weight : (safe?.weightKg ?? ''))}" placeholder="kg" style="width:78px;background:#101827;color:#fff;border:1px solid #31455f;border-radius:4px;padding:4px;"></td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);min-width:300px;">${candidateButtons(issue, rowIndex) || '<span style="color:#64748b;">No suggestion</span>'}</td>
   </tr>`;
 }
@@ -84,7 +111,7 @@ function popupMarkup(rows, entries) {
       <div><div style="font-size:18px;font-weight:700;color:#9cc5ff;">Rigid Weights Need Review — Consolidated</div><div data-mode-a-rigid-summary style="font-size:12px;color:#94a3b8;margin-top:4px;">${rows.length} rigid node(s) across ${entries.length} XML file(s).</div></div>
       <button type="button" data-mode-a-rigid-cancel style="cursor:pointer;background:transparent;border:1px solid #475569;border-radius:6px;color:#94a3b8;padding:6px 12px;">Cancel Batch Run</button>
     </div>
-    <div style="background:#2a210b;border:1px solid #7c5a18;color:#ffe7a3;padding:9px;border-radius:6px;font-size:12px;margin-bottom:10px;">One review gate covers all enabled XML models. Source identity is preserved; Rating and Weight changes are written only to that XML. “Use All Safe Suggestions (60–100%)” fills only direct master candidates with a verified rating, bore and component length. Inferred or lower-confidence suggestions require review. Enter mass in kg; the optional kg→N CII export conversion applies ×10 only at output.</div>
+    <div style="background:#2a210b;border:1px solid #7c5a18;color:#ffe7a3;padding:9px;border-radius:6px;font-size:12px;margin-bottom:10px;">One early review gate covers zero-weight and existing suspicious positive-weight assignments for all enabled XML models. New weights created during final enrichment trigger an additional mandatory final-export review. Source identity is preserved; Rating and Weight changes are written only to that XML. “Use All Safe Suggestions (60–100%)” fills only direct master candidates with a verified rating, bore and component length. Inferred or lower-confidence suggestions require review. Enter mass in kg; the optional kg→N CII export conversion applies ×10 only at output.</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
       <input type="search" data-mode-a-rigid-search placeholder="Search source / branch / node..." style="min-width:250px;padding:6px;background:#0b1220;color:#e2e8f0;border:1px solid #475569;border-radius:5px;">
       <select data-mode-a-rigid-source style="padding:6px;background:#0b1220;color:#e2e8f0;border:1px solid #475569;border-radius:5px;"><option value="">All XML files</option>${sourceOptions}</select>
