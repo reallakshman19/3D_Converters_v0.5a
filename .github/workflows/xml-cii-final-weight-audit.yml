@@ -1,0 +1,88 @@
+name: XML CII final rigid weight audit and auto-fill gate
+on:
+  push:
+    branches:
+      - fix/weight-validation-autoapply-60-20261103
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  weight-audit-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download unchanged external GLRD reference inputs
+        run: |
+          mkdir -p /tmp/glrd-audit-input /tmp/glrd-audit-output
+          root="https://raw.githubusercontent.com/reallakshman19/3D_Converters/main/Benchmarks/XML-CII-2019/revamped"
+          curl --retry 3 -fsSL "$root/GLRD-1000-PSI-02.xml" -o /tmp/glrd-audit-input/source.xml
+          curl --retry 3 -fsSL "$root/STD-00-PX-4338-01001-0001-02.xlsx" -o /tmp/glrd-audit-input/linelist.xlsx
+          curl --retry 3 -fsSL "$root/STF_2026Nov03-0839_managed_stage.json" -o /tmp/glrd-audit-input/stage.json
+          curl --retry 3 -fsSL "https://raw.githubusercontent.com/reallakshman19/3D_Converters/25db94769994751bb0fb6e6d83a578efd9ac8162/docs/docs/Masters/wtValveweights.json" -o /tmp/glrd-audit-input/master.json
+          sha256sum /tmp/glrd-audit-input/*
+      - name: Test 60 percent auto-fill policy and 939 to 10020 regression fixture
+        env:
+          GLRD_WEIGHT_MASTER_PATH: /tmp/glrd-audit-input/master.json
+          GLRD_WEIGHT_REPORT_OUTPUT: /tmp/glrd-audit-output/GLRD_node460_A1_A2.json
+        run: |
+          node tests/xml-cii-final-weight-audit.test.mjs
+          GLRD_WEIGHT_MASTER_PATH=/tmp/glrd-audit-input/master.json node tests/xml-cii-node460-flange-weight.test.mjs
+          node tests/xml-cii-mode-a-consolidated-rigid-review.test.mjs
+          node tests/xml-cii-weight-validation-app-static.test.js
+          node tests/empirical-weight-validation-report.test.js
+          node --check tabs/model-converters/converters/xmltocii2019_runner.js
+          node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-run-workflow.js
+          node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-run-workflow-atta-default.js
+          node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-rigid-review-mode-a.js
+      - name: Recreate original PR and current PR enriched XML and CII from real sources
+        run: |
+          git worktree add --detach /tmp/weight-before 1629dc8e5e1b764c69e4efbb19be98295e8ebcfd
+          python3 /tmp/weight-before/tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-audit-input/source.xml --staged /tmp/glrd-audit-input/stage.json --linelist /tmp/glrd-audit-input/linelist.xlsx --out /tmp/glrd-audit-output --label before
+          python3 tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-audit-input/source.xml --staged /tmp/glrd-audit-input/stage.json --linelist /tmp/glrd-audit-input/linelist.xlsx --out /tmp/glrd-audit-output --label after
+          for file in reviewed-enriched.xml reviewed.cii raw-enriched.xml raw.cii master900-enriched.xml master900.cii master1500-enriched.xml master1500.cii; do
+            cmp "/tmp/glrd-audit-output/before/$file" "/tmp/glrd-audit-output/after/$file"
+          done
+          python3 tests/xml-cii-runtime-custody.test.py
+      - name: Audit actual GLRD 900 flange exported weight
+        run: |
+          python3 - <<'PY'
+          import json, xml.etree.ElementTree as ET
+          root = ET.parse('/tmp/glrd-audit-output/after/master900-enriched.xml').getroot()
+          branches = []
+          for branch in root.iter('Branch'):
+              branches.append({'branchName': branch.findtext('Branchname', ''),
+                'nodes': [{field: n.findtext(field, '') for field in (
+                  'NodeNumber','ComponentType','ComponentRefNo','Endpoint','Rigid',
+                  'Position','Weight','BoreMm','Rating')} for n in branch.findall('Node')]})
+          with open('/tmp/glrd-audit-output/GLRD-900-branch-records.json', 'w') as file:
+              json.dump(branches, file)
+          PY
+          node --input-type=module - <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { auditXmlCiiRigidWeightsFromBranches } from './converters/xml-cii2019-core/rigid-weight-export-audit.js';
+          import { validateXmlCiiFinalRigidWeightAudit } from './converters/xml-cii2019-core/rigid-weight-final-validation.js';
+          const masterRows = JSON.parse(readFileSync('/tmp/glrd-audit-input/master.json','utf8'));
+          const branches = JSON.parse(readFileSync('/tmp/glrd-audit-output/GLRD-900-branch-records.json','utf8'))
+            .map(b=>({branchName:b.branchName,nodes:b.nodes.map(n=>({
+              nodeNumber:n.NodeNumber,componentType:n.ComponentType,componentRefNo:n.ComponentRefNo,
+              endpoint:n.Endpoint,rigid:n.Rigid,position:n.Position,weight:n.Weight,boreMm:n.BoreMm,rating:n.Rating
+            }))}));
+          const rawAudit = auditXmlCiiRigidWeightsFromBranches(branches,{kgToNewton:true});
+          const match = rawAudit.rows.find(r=>r.toNode==='460');
+          if (!match || Math.abs(match.massKg-15)>1e-8 || match.exportedWeight!==150) throw new Error('GLRD node 460 final export audit missing 15 kg/150 N');
+          const rows=[{branchName:match.branchName,nodeNumber:match.toNode,componentRefNo:match.componentRefNo,
+            rating:'900',candidates:[{preferred:true,rowData:{TypeDesc:'Weldneck Flange',NS:2,DN:50,Rating:900,'RF/RTJ KG':15}}]}];
+          const report=validateXmlCiiFinalRigidWeightAudit(rawAudit,rows,masterRows);
+          writeFileSync('/tmp/glrd-audit-output/GLRD-900-final-rigid-export-audit.json',JSON.stringify(report,null,2)+'\n');
+          console.log('GLRD actual positive RIGID rows:',report.summary.positiveRigidEdges,'flagged:',report.summary.flaggedEdges,'empirical abnormal:',report.summary.empiricalAbnormalEdges,'unvalidated:',report.summary.empiricalUnvalidatedEdges);
+          console.log('GLRD node 460 A1/A2:',JSON.stringify(report.empiricalReport.rows.find(r=>r.nodeNumber==='460')));
+          JS
+      - name: Upload real reference and audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xml-cii-final-weight-audit-evidence
+          path: /tmp/glrd-audit-output/
+          if-no-files-found: warn

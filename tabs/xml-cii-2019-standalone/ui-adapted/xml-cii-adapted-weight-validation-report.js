@@ -95,7 +95,7 @@ function cell(value, digits = null) {
 function renderTable(host, report) {
   const rows = report?.abnormalities || [];
   if (!rows.length) {
-    host.innerHTML = '<div style="padding:12px;color:#86efac;border:1px solid #166534;background:#052e16;border-radius:6px;">No resolved component weight exceeds ±30% against the available Approach 1 / Approach 2 estimates.</div>';
+    host.innerHTML = `<div style="padding:12px;border:1px solid #475569;border-radius:6px;">No A1/A2 abnormality among validated weights. This is <strong>not an all-clear</strong>: ${report?.summary?.unvalidated || 0} component(s) were unvalidated and ${report?.summary?.withinThresholdPartial || 0} had only partial estimator coverage. Post-review split weights require the separate final rigid-weight export audit.</div>`;
     return;
   }
   host.innerHTML = `<div style="overflow:auto;max-height:46vh;border:1px solid #334155;border-radius:6px;">
@@ -156,7 +156,7 @@ export function appendEmpiricalWeightValidationReport(card, stateRef) {
     csvBtn.disabled = false;
     jsonBtn.disabled = false;
     zipBtn.disabled = false;
-    if (status) status.textContent = `${report.summary.abnormalRows} abnormal of ${report.summary.inputRows} resolved component(s); A1 ${report.summary.approach1Abnormal}, A2 ${report.summary.approach2Abnormal}; ${scope.skipped.length} skipped/unresolved.`;
+    if (status) status.textContent = `${report.summary.abnormalRows} abnormal of ${report.summary.inputRows} resolved component(s); A1 ${report.summary.approach1Abnormal}, A2 ${report.summary.approach2Abnormal}; ${scope.skipped.length} skipped/unresolved, ${report.summary.unvalidated} unvalidated; the final rigid-weight audit runs after conversion review.`;
   };
 
   card.addEventListener('xml-cii-weight-validator-ready', (event) => buildFromResolved(event.detail || {}));

@@ -541,7 +541,7 @@ function collectWeightRows(xmlTextVal, stagedJsonText, config, mode = 'zero-rigi
       const isMapped = mappedWeight !== null && mappedWeight > 0;
       const reviewEndpoint = isXmlCiiWeightReviewEndpoint(node);
       if (mode === 'all-review-nodes') {
-        if (!reviewNode || !reviewEndpoint || lengthMm === null || lengthMm <= 6) return;
+        if (!reviewNode || lengthMm === null || lengthMm <= 6 || (!reviewEndpoint && !isMapped)) return;
       } else if (!reviewNode || !reviewEndpoint || lengthMm === null || (weight !== null && Math.abs(weight) > 1e-12)) return;
       let boreMm = xmlCiiNumberText(xmlText(node, 'BoreMm'));
       if (boreMm === null) {
