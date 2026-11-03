@@ -50,12 +50,23 @@ jobs:
           python3 - <<'PY'
           import json, xml.etree.ElementTree as ET
           root = ET.parse('/tmp/glrd-audit-output/pr-after/master900-enriched.xml').getroot()
+          def local_name(element):
+              return element.tag.rsplit('}', 1)[-1]
+          def direct_children(element, name):
+              return [child for child in element if local_name(child) == name]
+          def child_text(element, name):
+              return next((item.text or '' for item in direct_children(element, name)), '')
           branches = []
-          for branch in root.iter('Branch'):
-              branches.append({'branchName': branch.findtext('Branchname', ''),
-                'nodes': [{field: n.findtext(field, '') for field in (
+          for branch in root.iter():
+              if local_name(branch) != 'Branch':
+                  continue
+              branches.append({'branchName': child_text(branch, 'Branchname'),
+                'nodes': [{field: child_text(node, field) for field in (
                   'NodeNumber','ComponentType','ComponentRefNo','Endpoint','Rigid',
-                  'Position','Weight','BoreMm','Rating')} for n in branch.findall('Node')]})
+                  'Position','Weight','BoreMm','Rating')}
+                    for node in direct_children(branch, 'Node')]})
+          assert branches and any(node['NodeNumber'] == '460'
+              for branch in branches for node in branch['nodes']), 'namespaced GLRD node 460 missing'
           with open('/tmp/glrd-audit-output/GLRD-900-branch-records.json', 'w') as file:
               json.dump(branches, file)
           PY
