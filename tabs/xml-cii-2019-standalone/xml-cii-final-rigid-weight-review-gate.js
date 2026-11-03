@@ -85,7 +85,13 @@ export function buildStandaloneFinalRigidReview(parity, config = {}, options = {
     [...collectXmlCiiWeightMatchRows(xmlText, options.stagedJsonText || '', config), ...(parity?.nodeRows || [])],
     config?.weight?.masterRows || [],
   );
-  const issues = audit.rows.filter(isReviewRequired).map((row) => edgeReviewIssue(row, parity?.nodeRows));
+  // Optional inspector in Output / Run is deliberately broader than the
+  // export blocker: it shows every positive physical RIGID element (including
+  // empirically normal 19.1 mm edges) without changing the release policy.
+  const selectedRows = options.includeAllPositiveMasses
+    ? audit.rows
+    : audit.rows.filter(isReviewRequired);
+  const issues = selectedRows.map((row) => edgeReviewIssue(row, parity?.nodeRows));
   const byKey = new Map(issues.map((issue) => [issue.key, issue]));
   for (const row of parity?.reviewProposals || []) {
     const proposal = proposalIssue(row, parity?.nodeRows);
@@ -116,10 +122,22 @@ export function buildStandaloneFinalRigidReview(parity, config = {}, options = {
 
 export async function enforceStandaloneFinalRigidWeightReview(parity, job, runtime = {}) {
   const config = JSON.parse(text(job?.supportConfigJson) || '{}');
-  const gate = buildStandaloneFinalRigidReview(parity, config, {
-    kgToNewton: job?.options?.kgToNewton !== false,
-    stagedJsonText: job?.stagedJsonText || '',
-  });
+  // Manual Output / Run inspection stores reviewed per-owner weights in the
+  // same config override map. Apply those to the exact enriched XML BEFORE
+  // empirical auditing, including a positive existing source weight; otherwise
+  // a reviewed correction (e.g. 150 kg -> 15 kg) would be silently ignored.
+  const reviewOverrides = config?.overrides?.rigidWeight || {};
+  const preapplied = Object.keys(reviewOverrides).length
+    ? applyXmlCiiRigidWeightOverrides(parity.xmlText, reviewOverrides)
+    : { xmlText: parity.xmlText, appliedCount: 0 };
+  const gate = buildStandaloneFinalRigidReview(
+    { ...parity, xmlText: preapplied.xmlText },
+    config,
+    {
+      kgToNewton: job?.options?.kgToNewton !== false,
+      stagedJsonText: job?.stagedJsonText || '',
+    },
+  );
   if (!gate.issues.length) return { ok: true, xmlText: gate.xmlText, audit: gate.audit, reviewedRows: [], issues: [] };
   const identification = gate.issues.map((item) => `${item.fromNode || '?'} → ${item.toNode}: ${item.reviewFlags.join('/')}`).join('; ');
   if (typeof runtime.reviewFinalRigidWeights !== 'function') {

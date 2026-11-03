@@ -40,7 +40,11 @@ export function xmlCiiEmpiricalWeightValidationInput(auditRow, issue) {
     source: auditRow.weightOrigin,
     componentRefNo: auditRow.componentRefNo,
     nodeNumber: auditRow.toNode,
-    typeDesc: text(row.TypeDesc || row.typeDesc || candidate?.typeDesc || auditRow.nodeName || issue?.typeDesc),
+    // The final enriched owner NodeName is physical source evidence. Do not
+    // silently substitute the nearest Weight Match master TypeDesc for an
+    // explicit but unknown owner type; that would make an unvalidated mass
+    // appear validated by a different component family.
+    typeDesc: text(auditRow.nodeName || row.TypeDesc || row.typeDesc || candidate?.typeDesc || issue?.typeDesc),
     ns: row.NS ?? row.ns ?? issue?.ns,
     dn: auditRow.boreMm ?? issue?.boreMm,
     rating: auditRow.rating || issue?.rating,
