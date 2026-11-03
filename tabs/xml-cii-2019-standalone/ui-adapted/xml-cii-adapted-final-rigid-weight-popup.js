@@ -12,6 +12,24 @@ function evidenceCell(approach) {
   return `<span style="color:${approach.abnormal ? '#fca5a5' : '#86efac'};">${numberText(approach.estimatedWeightKg, 3)} kg · Δ ${signed}</span>`;
 }
 
+/**
+ * Pick a strictly positive estimate from the existing A1/A2 API, with
+ * explicitly selected priority; never use a guessed or assigned weight.
+ */
+export function preferredEmpiricalWeightForIssue(issue, strategy = 'A1_FIRST') {
+  const evidence = issue?.empiricalEvidence || {};
+  const approaches = strategy === 'A2_FIRST'
+    ? [['A2 matrix', evidence.approach2], ['A1 size-band', evidence.approach1]]
+    : [['A1 size-band', evidence.approach1], ['A2 matrix', evidence.approach2]];
+  for (const [source, approach] of approaches) {
+    const mass = Number(approach?.estimatedWeightKg);
+    if (approach?.available === true && Number.isFinite(mass) && mass > 0) {
+      return { massKg: mass, source };
+    }
+  }
+  return null;
+}
+
 function reviewRow(issue, index, inNewton) {
   const existing = Number(issue.currentWeightKg);
   const current = Number.isFinite(existing) && existing > 0 ? existing : null;
@@ -37,6 +55,7 @@ function reviewRow(issue, index, inNewton) {
     <td style="padding:8px;min-width:150px;">${evidenceCell(evidence.approach2)}</td>
     <td style="padding:8px;min-width:190px;color:#fbbf24;">${esc(flags.join('; '))}</td>
     <td style="padding:8px;">
+      <span data-final-rigid-estimate-source="${index}" style="display:block;font-size:10px;color:#93c5fd;margin-bottom:3px;"></span>
       <input type="number" min="0.001" step="any" data-final-rigid-mass="${index}"
        value="${attr(current === null ? '' : current)}" placeholder="Enter kg"
        aria-label="Approved mass in kg for element ${attr(displayElement)}"
@@ -75,6 +94,19 @@ export function finalRigidWeightReviewMarkup(issues, options = {}) {
       <input type="search" data-final-rigid-search placeholder="e.g. 939, 10020, 19.1 mm, FLANGE"
         style="padding:8px;min-width:260px;color:#fff;background:#101827;border:1px solid #64748b;border-radius:5px;">
       </label>` : ''}
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0;">
+      <button type="button" data-final-rigid-empirical-fill
+        style="background:#155e75;color:#fff;border:1px solid #0891b2;border-radius:5px;padding:9px 14px;font-weight:700;">
+        Apply All Empirical Based
+      </button>
+      <label style="font-size:12px;color:#dbeafe;">Estimate priority
+        <select data-final-rigid-empirical-strategy style="padding:7px;background:#101827;color:#fff;border:1px solid #64748b;">
+          <option value="A1_FIRST">A1 size-band, fallback to A2 matrix</option>
+          <option value="A2_FIRST">A2 matrix, fallback to A1 size-band</option>
+        </select>
+      </label>
+      <span style="font-size:11px;color:#fcd34d;">Prefills kg only; does NOT approve or save. Rows without an empirical estimate stay unchanged.</span>
+    </div>
     <div style="overflow:auto;max-height:55vh;">
       <table style="border-collapse:collapse;width:100%;font-size:12px;">
         <thead><tr style="position:sticky;top:0;background:#1e293b;">
@@ -109,6 +141,31 @@ export function openStandaloneFinalRigidWeightReviewPopup(issues = [], options =
     const cancel = () => finish({ cancelled: true, weightsByKey: {}, approvedKeys: [] });
     overlay.querySelector('[data-final-rigid-cancel]')?.addEventListener('click', cancel);
     overlay.querySelector('[data-final-rigid-cancel-secondary]')?.addEventListener('click', cancel);
+    overlay.querySelector('[data-final-rigid-empirical-fill]')?.addEventListener('click', () => {
+      const strategy = overlay.querySelector('[data-final-rigid-empirical-strategy]')?.value || 'A1_FIRST';
+      let filled = 0;
+      let skipped = 0;
+      issues.forEach((issue, index) => {
+        const selected = preferredEmpiricalWeightForIssue(issue, strategy);
+        const input = overlay.querySelector(`[data-final-rigid-mass="${index}"]`);
+        const source = overlay.querySelector(`[data-final-rigid-estimate-source="${index}"]`);
+        if (!selected || !input) {
+          skipped++;
+          if (source) source.textContent = 'No A1/A2 estimate — manual weight required';
+          return;
+        }
+        input.value = String(Number(selected.massKg.toFixed(3)));
+        if (source) source.textContent = 'Empirical: ' + selected.source + ' (kg)';
+        input.style.borderColor = '#0891b2';
+        filled++;
+      });
+      const status = overlay.querySelector('[data-final-rigid-status]');
+      if (status) {
+        status.style.color = '#bae6fd';
+        status.textContent = 'Filled ' + filled + ' empirical estimate(s); ' +
+          skipped + ' unavailable. Explicit Reviewed checkboxes remain required before export/save.';
+      }
+    });
     const search = overlay.querySelector('[data-final-rigid-search]');
     search?.addEventListener('input', () => {
       const query = String(search.value || '').trim().toLowerCase();
