@@ -1,5 +1,6 @@
 import { auditXmlCiiRigidWeightsForExport } from '../../converters/xml-cii2019-core/rigid-weight-export-audit.js';
 import { validateXmlCiiFinalRigidWeightAudit } from '../../converters/xml-cii2019-core/rigid-weight-final-validation.js';
+import { applyXmlCiiSplitRigidWeightPropagation } from '../../converters/xml-cii2019-core/split-rigid-weight-propagation.js';
 import {
   applyXmlCiiRigidWeightOverrides,
   collectXmlCiiWeightMatchRows,
@@ -117,7 +118,8 @@ export function buildStandaloneFinalRigidReview(parity, config = {}, options = {
     }
     seen.set(issue.key, identity);
   }
-  return { audit, issues, xmlText };
+  const splitCustody = applyXmlCiiSplitRigidWeightPropagation(xmlText);
+  return { audit, issues, xmlText, splitCustody };
 }
 
 export async function enforceStandaloneFinalRigidWeightReview(parity, job, runtime = {}) {
@@ -138,6 +140,19 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
       stagedJsonText: job?.stagedJsonText || '',
     },
   );
+  // Empirical plausibility never overrides a split component with multiple
+  // positive or invalid sibling masses. Do not run Python with ambiguous owners.
+  const structural = gate.splitCustody?.ownershipIssues || [];
+  if (structural.length) {
+    const first = structural[0];
+    return {
+      ok: false,
+      error: `Structural RIGID mass ownership unresolved for ${structural.length} component(s). ` +
+        `Example: ${first.branchName} / ${first.componentRefNo} (${first.reason}). ` +
+        'Do not duplicate whole-component mass on split siblings.',
+      ...gate,
+    };
+  }
   if (!gate.issues.length) return { ok: true, xmlText: gate.xmlText, audit: gate.audit, reviewedRows: [], issues: [] };
   const identification = gate.issues.map((item) => `${item.fromNode || '?'} → ${item.toNode}: ${item.reviewFlags.join('/')}`).join('; ');
   if (typeof runtime.reviewFinalRigidWeights !== 'function') {
@@ -161,6 +176,14 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   const applied = applyXmlCiiRigidWeightOverrides(gate.xmlText, permitted);
   if (applied.appliedCount !== gate.issues.length) {
     return { ok: false, error: `Final rigid weight changes affected ${applied.appliedCount} node(s); expected ${gate.issues.length}. Ambiguous target or missing node: CII export blocked.`, ...gate };
+  }
+  const afterReviewCustody = applyXmlCiiSplitRigidWeightPropagation(applied.xmlText);
+  if (afterReviewCustody.ownershipIssues.length) {
+    const first = afterReviewCustody.ownershipIssues[0];
+    return { ok: false,
+      error: `Explicit review caused unresolved RIGID split mass ownership at ${first.branchName} / ${first.componentRefNo}: ${first.reason}. CII export blocked.`,
+      ...gate,
+    };
   }
   const reviewedRows = gate.issues.map((issue) => ({
     branchName: issue.branchName, fromNode: issue.fromNode, toNode: issue.toNode,
