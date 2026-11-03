@@ -163,7 +163,7 @@ const normalAuto=await runOutputEmpiricalReviewFromUi({current:state()},{
 assert.equal(normalAutoCalls,0,'empirically compliant 19mm element must not trigger automatic popup');
 assert.equal(normalAuto.flagged,0);
 const missing=await inspectOutputEmpiricalSource(state(),injected(15,'NOT_A_MODEL_FAMILY'));
-assert.equal(missing.mandatory.issues.length,1,'unvalidated positive masses also require review');
+assert.equal(missing.mandatory.issues.length,1,'unvalidated positive masses also require review; evidence='+JSON.stringify(missing.all.audit.rows.map(row=>({nodeName:row.nodeName,empirical:row.empiricalEvidence, flags:row.reviewFlags}))));
 assert.equal(preferredEmpiricalWeightForIssue(missing.mandatory.issues[0]),null);
 
 const renderRoot=document.createElement('div');
