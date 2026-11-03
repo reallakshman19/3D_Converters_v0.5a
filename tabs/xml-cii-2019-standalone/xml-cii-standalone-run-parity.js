@@ -73,7 +73,7 @@ function recordExpected(entries, {
 
 const WEIGHT_BEARING_TYPES = new Set(['FLAN', 'VALV', 'RIGID', 'INST']);
 
-function mappedNodeWeights(nodeRows, config) {
+export function mappedNodeWeights(nodeRows, config) {
   const weights = new Map();
   const reviewProposals = [];
   for (const nr of nodeRows || []) {
