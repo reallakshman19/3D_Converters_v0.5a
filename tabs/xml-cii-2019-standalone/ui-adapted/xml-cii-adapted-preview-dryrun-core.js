@@ -380,7 +380,7 @@ export function _processDataText(config, keys, fieldKey) {
   return '';
 }
 
-export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
+export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText, previewCache = null) {
   if (typeof DOMParser === 'undefined') return { branchRows: [], nodeRows: [] };
   let document;
   try {
@@ -407,7 +407,9 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
 
   const branchRows = [];
   const nodeRows = [];
-  const pipingClassIndex = buildPipingClassIndex(config.pipingClass?.masterRows || []);
+  const pipingClassIndex = previewCache?.getPipingClassIndex
+    ? previewCache.getPipingClassIndex(config.pipingClass?.masterRows || [])
+    : buildPipingClassIndex(config.pipingClass?.masterRows || []);
   const stagedIndex = buildStagedDtxrIndex(stagedJsonText || '', config);
   const materialMap = config.material?.mapRows || [];
 
@@ -542,12 +544,12 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
       materialCodeKey: resolved.materialCodeKey || _classKey({ pipingClass: resolved.pipingClass || derivedClassRaw })
     });
 
-    _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass: resolved.pipingClass, stagedIndex, config, nodeRows });
+    _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass: resolved.pipingClass, stagedIndex, config, nodeRows, previewCache });
   }
   return { branchRows, nodeRows };
 }
 
-function _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass, stagedIndex, config, nodeRows }) {
+function _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass, stagedIndex, config, nodeRows, previewCache }) {
   let previousPosition = null;
   const branchNodes = _xmlChildrenByName(branch, 'Node');
   branchNodes.forEach((node, nodeIdx) => {
@@ -559,7 +561,7 @@ function _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolv
     const componentType = _xmlText(node, 'ComponentType');
     const weightEligible = isXmlCiiWeightReviewNode(node);
     const dtxrRes = weightEligible ? resolveXmlCiiNodeDtxr(node, stagedIndex, config) : { value: '', source: 'not-weight-eligible', matchedKey: '' };
-    const ranking = (weightEligible && boreMm != null && branchRating && lengthMm != null) ? rankXmlCiiWeightCandidates({ boreMm, rating: branchRating, lengthMm, nodeName: _xmlText(node, 'NodeName'), componentType, componentRefNo: _xmlText(node, 'ComponentRefNo'), dtxr: dtxrRes.value || '' }, config, { includeRejected: true }) : { nodeHint: null, candidates: [], rejectedCandidates: [], best: null };
+    const ranking = (weightEligible && boreMm != null && branchRating && lengthMm != null) ? (previewCache?.rankWeight || rankXmlCiiWeightCandidates)({ boreMm, rating: branchRating, lengthMm, nodeName: _xmlText(node, 'NodeName'), componentType, componentRefNo: _xmlText(node, 'ComponentRefNo'), dtxr: dtxrRes.value || '' }, config, { includeRejected: true }) : { nodeHint: null, candidates: [], rejectedCandidates: [], best: null };
     const candidates = ranking.candidates.slice(0, 5);
     const weightKey = xmlCiiWeightReviewNodeOverrideKey(branchName, node, nodeIdx);
     const overrideWeight = Number(config?.overrides?.rigidWeight?.[weightKey]);

@@ -19,6 +19,9 @@ await writeFile(join(tempRoot, 'package.json'), '{"type":"module"}', 'utf8');
 await copy(sourcePath);
 const moduleDir = join(tempRoot, 'tabs/xml-cii-2019-standalone/ui-adapted');
 await mkdir(moduleDir, { recursive: true });
+// The strict-line fixture stubs adjacent modules, including the per-build cache.
+await writeFile(join(moduleDir, 'xml-cii-adapted-preview-per-build-cache.js'),
+  'export function createPreviewPerBuildCache() { return {}; }\n', 'utf8');
 await writeFile(join(moduleDir, 'xml-cii-adapted-preview-dryrun-core.js'), `
 export function xmlCiiDryRunPreview() { return { branchRows: [], nodeRows: [] }; }
 `, 'utf8');

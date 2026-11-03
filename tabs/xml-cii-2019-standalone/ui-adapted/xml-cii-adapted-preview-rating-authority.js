@@ -86,14 +86,14 @@ function emptyWeightAuthority(nodeRow, rating) {
   return { ...nodeRow, rating, valveHint: '', weightMatch: null, weightCandidates: [], rejectedWeightCandidates: [] };
 }
 
-function rerankNodeRows(nodeRows, branchRows, config) {
+function rerankNodeRows(nodeRows, branchRows, config, previewCache = null) {
   const byBranch = new Map(branchRows.map((row) => [row.branchName, row]));
   return (nodeRows || []).map((nodeRow) => {
     const branch = byBranch.get(nodeRow.branchName);
     const rating = _toText(branch?.rating || '').trim();
     if (!rating) return emptyWeightAuthority(nodeRow, '');
     if (!Number.isFinite(Number(nodeRow.boreMm)) || !Number.isFinite(Number(nodeRow.lengthMm))) return emptyWeightAuthority(nodeRow, rating);
-    const ranking = rankXmlCiiWeightCandidates({
+    const ranking = (previewCache?.rankWeight || rankXmlCiiWeightCandidates)({
       boreMm: nodeRow.boreMm,
       rating,
       lengthMm: nodeRow.lengthMm,
@@ -112,7 +112,7 @@ function rerankNodeRows(nodeRows, branchRows, config) {
   });
 }
 
-export function applyPreviewRatingAuthority({ xmlText, config = {}, stagedJsonText = '', result } = {}) {
+export function applyPreviewRatingAuthority({ xmlText, config = {}, stagedJsonText = '', result, previewCache = null } = {}) {
   const branchRows = Array.isArray(result?.branchRows) ? result.branchRows : [];
   if (!branchRows.length || typeof DOMParser === 'undefined') return result || { branchRows: [], nodeRows: [] };
   let document;
@@ -124,7 +124,9 @@ export function applyPreviewRatingAuthority({ xmlText, config = {}, stagedJsonTe
   }
   const branches = [...document.getElementsByTagName('Branch')];
   const stagedIndex = buildStagedDtxrIndex(stagedJsonText || '', config);
-  const pipingClassIndex = buildPipingClassIndex(config?.pipingClass?.masterRows || []);
+  const pipingClassIndex = previewCache?.getPipingClassIndex
+    ? previewCache.getPipingClassIndex(config?.pipingClass?.masterRows || [])
+    : buildPipingClassIndex(config?.pipingClass?.masterRows || []);
   const ratedRows = branchRows.map((row, index) => {
     const branch = branches[index] || branches.find((item) => _xmlText(item, 'Branchname') === row.branchName);
     const branchPipingClass = deriveXmlCiiPipingClassFromBranchName(row.branchName, config);
@@ -152,5 +154,5 @@ export function applyPreviewRatingAuthority({ xmlText, config = {}, stagedJsonTe
       ratingNeedsReview: !authority.rating,
     };
   });
-  return { ...(result || {}), branchRows: ratedRows, nodeRows: rerankNodeRows(result?.nodeRows || [], ratedRows, config) };
+  return { ...(result || {}), branchRows: ratedRows, nodeRows: rerankNodeRows(result?.nodeRows || [], ratedRows, config, previewCache) };
 }
