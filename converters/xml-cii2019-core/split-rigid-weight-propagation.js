@@ -20,18 +20,6 @@ function childText(parent, name) {
   return text(firstChild(parent, name)?.textContent);
 }
 
-function setChildText(document, parent, name, value) {
-  let child = firstChild(parent, name);
-  if (!child) {
-    child = parent?.namespaceURI ? document.createElementNS(parent.namespaceURI, name) : document.createElement(name);
-    parent.appendChild(child);
-  }
-  const before = text(child.textContent);
-  const after = text(value);
-  child.textContent = after;
-  return before !== after;
-}
-
 function numeric(value) {
   const cleaned = text(value).replace(/,/g, '');
   if (!cleaned) return null;
@@ -86,21 +74,19 @@ function uniquePositiveWeights(group) {
   return values;
 }
 
-function shouldReceivePropagatedWeight(item) {
-  const current = Number(item.weight);
-  return !Number.isFinite(current) || Math.abs(current) <= 1e-12;
-}
-
 export function applyXmlCiiSplitRigidWeightPropagation(xmlText, options = {}) {
   const empty = {
     xmlText,
     appliedCount: 0,
     appliedRows: [],
     diagnostics: [],
+    ownershipIssues: [],
     stats: {
       splitRigidWeightPropagationGroups: 0,
       splitRigidWeightPropagated: 0,
       splitRigidWeightPropagationSkipped: 0,
+      splitRigidWeightOwnerCandidatesPreserved: 0,
+      splitRigidWeightOwnershipIssues: 0,
     },
   };
   if (!text(xmlText) || typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') return empty;
@@ -122,72 +108,71 @@ export function applyXmlCiiSplitRigidWeightPropagation(xmlText, options = {}) {
     groups.get(key).push(record);
   }
 
-  const appliedRows = [];
+  // SAFETY: Multiple geometrical nodes with one ComponentRefNo are not
+  // multiple physical owners. A single known weight is not a licence to copy
+  // it to every zero/missing sibling. Ownership is decided by a separate
+  // component/edge ledger, never by this propagation compatibility hook.
   const diagnostics = [];
+  const ownershipIssues = [];
   let candidateGroups = 0;
-  let skipped = 0;
+  let preservedLumpedCandidates = 0;
 
   for (const group of groups.values()) {
     if (!isSplitRigidWeightGroup(group)) continue;
     candidateGroups += 1;
     const weights = uniquePositiveWeights(group);
-    if (weights.length !== 1) {
-      if (weights.length > 1) {
-        skipped += 1;
-        diagnostics.push({
-          type: 'split-rigid-weight-propagation-skipped',
-          branchName: group[0]?.branchName || '',
-          componentRefNo: group[0]?.componentRefNo || '',
-          reason: 'ambiguous-positive-weights',
-          weights,
-          message: 'Split FLAN/RIGID component has multiple positive sibling weights; propagation was skipped to avoid overwriting with an ambiguous value.',
-        });
-      }
-      continue;
-    }
-
-    const propagatedWeight = weights[0];
-    for (const item of group) {
-      if (!shouldReceivePropagatedWeight(item)) continue;
-      if (!setChildText(document, item.node, 'Weight', String(propagatedWeight))) continue;
-      const row = {
-        type: 'split-rigid-weight-propagated',
-        branchName: item.branchName,
+    const positiveNodes = group.filter((item) => item.weight !== null && item.weight > 0);
+    const blankNodes = group.filter((item) => item.weight === null || item.weight === 0);
+    const negativeOrInvalidNodes = group.filter((item) => item.weight !== null && item.weight < 0);
+    const evidence = {
+      branchName: group[0].branchName,
+      componentRefNo: group[0].componentRefNo,
+      nodes: group.map((item) => ({
         nodeNumber: item.nodeNumber,
         endpoint: item.endpoint,
         rigid: item.rigid,
         componentType: item.componentType,
-        componentRefNo: item.componentRefNo,
         position: item.position,
-        weight: propagatedWeight,
-        method: 'same-component-ref-split-sibling',
-        message: `Propagated reviewed split component weight ${propagatedWeight} to zero-weight ${item.componentType || 'node'} ${item.nodeNumber || ''} with ComponentRefNo ${item.componentRefNo || ''}.`,
+        weightKg: item.weight,
+      })),
+      positiveNodes: positiveNodes.length,
+      zeroOrMissingNodes: blankNodes.length,
+      uniquePositiveWeights: weights,
+    };
+    if (negativeOrInvalidNodes.length || positiveNodes.length > 1) {
+      const issue = {
+        type: 'split-rigid-weight-ownership-unresolved',
+        allocationType: 'UNKNOWN',
+        reason: negativeOrInvalidNodes.length ? 'negative-node-weight' : 'multiple-positive-sibling-weights',
+        ...evidence,
+        message: 'Split FLAN/RIGID component has conflicting or invalid node weights. Establish physical ownership and an authorized allocation before export; no mass was copied or removed.',
       };
-      appliedRows.push(row);
-      diagnostics.push(row);
+      ownershipIssues.push(issue);
+      diagnostics.push(issue);
+    } else if (positiveNodes.length === 1 && blankNodes.length > 0) {
+      preservedLumpedCandidates += 1;
+      diagnostics.push({
+        type: 'split-rigid-weight-owner-candidate-preserved',
+        allocationType: 'UNKNOWN',
+        reason: 'one-positive-owner-candidate',
+        ...evidence,
+        message: 'Preserved the sole positive node weight and its zero/missing siblings without propagation. The owner candidate still requires ledger ownership validation.',
+      });
     }
   }
 
-  const stats = {
-    splitRigidWeightPropagationGroups: candidateGroups,
-    splitRigidWeightPropagated: appliedRows.length,
-    splitRigidWeightPropagationSkipped: skipped,
-  };
-
-  if (appliedRows.length) {
-    diagnostics.push({
-      type: 'split-rigid-weight-propagation-summary',
-      count: appliedRows.length,
-      groups: candidateGroups,
-      message: 'Reviewed rigid/flange split weights were copied to zero-weight sibling nodes sharing the same ComponentRefNo before final CII conversion.',
-    });
-  }
-
   return {
-    xmlText: new XMLSerializer().serializeToString(document),
-    appliedCount: appliedRows.length,
-    appliedRows,
+    xmlText, // preserve the exact approved XML bytes
+    appliedCount: 0,
+    appliedRows: [],
     diagnostics,
-    stats,
+    ownershipIssues,
+    stats: {
+      splitRigidWeightPropagationGroups: candidateGroups,
+      splitRigidWeightPropagated: 0,
+      splitRigidWeightPropagationSkipped: candidateGroups,
+      splitRigidWeightOwnerCandidatesPreserved: preservedLumpedCandidates,
+      splitRigidWeightOwnershipIssues: ownershipIssues.length,
+    },
   };
 }
