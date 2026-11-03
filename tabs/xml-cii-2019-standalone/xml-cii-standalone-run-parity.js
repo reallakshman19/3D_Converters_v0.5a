@@ -11,6 +11,11 @@ import { enrichStandaloneDtxrAnnotations } from './xml-cii-standalone-dtxr-enric
 import { createStandaloneRunParityEvidence } from './xml-cii-run-parity-evidence.js';
 import { createEmpiricalWeightValidator } from '../../converters/empirical-weight/empirical-weight-validation.js';
 import {
+  XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT,
+  XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT,
+  xmlCiiWeightSuggestionConfidence,
+} from '../../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
+import {
   XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT,
   xmlCiiEmpiricalWeightValidationInput,
 } from '../../converters/xml-cii2019-core/rigid-weight-final-validation.js';
@@ -93,6 +98,10 @@ export function mappedNodeWeights(nodeRows, config) {
     }
     if (!Number.isFinite(proposed) || proposed <= 0) continue;
     const best = nr.weightCandidates?.[0] || nr.weightMatch || null;
+    const matchConfidence = xmlCiiWeightSuggestionConfidence(best);
+    const eligibleConfidence = matchConfidence !== null
+      && matchConfidence * 100 >= XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT
+      && matchConfidence * 100 <= XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT;
     const input = xmlCiiEmpiricalWeightValidationInput({
       branchName: nr.branchName, toNode: nr.nodeNumber, componentRefNo: nr.componentRefNo,
       boreMm: nr.boreMm, rating: nr.rating, massKg: proposed,
@@ -104,23 +113,26 @@ export function mappedNodeWeights(nodeRows, config) {
     const evidence = validator.validate(input, {
       abnormalityThresholdPct: XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT,
     });
-    if (evidence.status !== 'UNVALIDATED' && !evidence.reportableAbnormality) {
+    if (eligibleConfidence && evidence.status !== 'UNVALIDATED' && !evidence.reportableAbnormality) {
       weights.set(`${text(nr.branchName)}|${text(nr.nodeNumber)}`, proposed);
       continue;
     }
-    // Empirical evidence, not arbitrary length/mass or rank thresholds,
-    // determines whether a proposed fallback needs reviewer confirmation.
+    // Both policies must pass: 60–100% suggestion confidence and empirical
+    // A1/A2 deviation within ±50%. No arbitrary length/mass restrictions.
     reviewProposals.push({
       key: text(nr.key), branchName: text(nr.branchName),
       toNode: text(nr.nodeNumber), componentType: text(nr.componentType),
       componentRefNo: text(nr.componentRefNo), endpoint: text(nr.endpoint),
       elementLengthMm: nr.lengthMm ?? null, proposedWeightKg: proposed,
       currentWeightKg: 0, candidate: best,
+      suggestionConfidencePct: matchConfidence === null ? null : matchConfidence * 100,
       empiricalEvidence: evidence,
-      weightOrigin: 'empirical-review-required-preview-proposal',
-      reviewFlags: [evidence.reportableAbnormality
-        ? 'EMPIRICAL_A1_A2_ABNORMAL_GT_50_PERCENT'
-        : 'EMPIRICAL_VALIDATION_UNAVAILABLE'],
+      weightOrigin: 'review-required-preview-proposal',
+      reviewFlags: [
+        ...(!eligibleConfidence ? ['AUTO_SUGGESTION_CONFIDENCE_OUTSIDE_60_TO_100_PERCENT'] : []),
+        ...(evidence.reportableAbnormality ? ['EMPIRICAL_A1_A2_ABNORMAL_GT_50_PERCENT'] : []),
+        ...(evidence.status === 'UNVALIDATED' ? ['EMPIRICAL_VALIDATION_UNAVAILABLE'] : []),
+      ],
     });
   }
   return { weights, reviewProposals };
