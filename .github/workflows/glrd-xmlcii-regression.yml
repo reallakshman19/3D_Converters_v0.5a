@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Download external GLRD references
         run: |
           mkdir -p /tmp/glrd-reference
@@ -20,9 +22,17 @@ jobs:
           curl --retry 3 --fail --location --silent --show-error "$root/STF_2026Nov03-0839_managed_stage.json" -o /tmp/glrd-reference/stage.json
           sha256sum /tmp/glrd-reference/*
           wc -c /tmp/glrd-reference/*
-      - name: Replay GLRD conversion and capture enriched XML
+      - name: Create untouched-main baseline first
         run: |
-          python3 tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-reference/GLRD-1000-PSI-02.xml --out /tmp/glrd-replay --label baseline
+          git worktree add --detach /tmp/glrd-main origin/main
+          cp tests/glrd_xmlcii_external_reference.py /tmp/glrd-main/tests/glrd_xmlcii_external_reference.py
+          python3 /tmp/glrd-main/tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-reference/GLRD-1000-PSI-02.xml --out /tmp/glrd-replay --label main-before
+      - name: Recreate enriched XML with fixed PR branch
+        run: |
+          python3 tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-reference/GLRD-1000-PSI-02.xml --out /tmp/glrd-replay --label pr-after
+      - name: Compare outputs and enforce no unrelated changes
+        run: |
+          python3 tests/glrd_xmlcii_external_compare.py --before /tmp/glrd-replay/main-before --after /tmp/glrd-replay/pr-after --out /tmp/glrd-replay/diff
       - name: Run targeted regression tests
         run: |
           python3 tests/xml-cii-runtime-custody.test.py
