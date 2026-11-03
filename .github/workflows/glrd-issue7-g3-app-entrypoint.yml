@@ -88,7 +88,7 @@ jobs:
             --piping-class /tmp/glrd/inputs/piping-class.json \
             --weight /tmp/glrd/inputs/weight.json \
             --material-map /tmp/glrd/inputs/material-map.txt \
-            --out /tmp/glrd/outputs --label discovery \
+            --out /tmp/glrd/outputs --label baseline \
             --expected-sha "$GITHUB_SHA" --chromium "$CHROME_BIN"
       - name: Preserve real app observations and blockers
         if: always()
