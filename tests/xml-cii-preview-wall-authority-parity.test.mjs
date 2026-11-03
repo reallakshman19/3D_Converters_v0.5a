@@ -105,7 +105,7 @@ function previewInput(names, stagedJsonText) {
     wallThicknessSource: 'none', rating: '900',
   }));
   const nodeRows = names.flatMap((branchName, i) => [
-    { branchName, nodeNumber: i === 0 ? 10 : i * 20 + 100,
+    { branchName, nodeNumber: i === 0 ? 10 : (i === 1 ? 460 : i * 20 + 100),
       componentRefNo: '=P-' + i, endpoint: 1, boreMm: 999, weightKg: 123.974 },
     { branchName, nodeNumber: i * 20 + 101,
       componentRefNo: '=P-' + i, endpoint: 2, boreMm: 999, weightKg: 0 },
