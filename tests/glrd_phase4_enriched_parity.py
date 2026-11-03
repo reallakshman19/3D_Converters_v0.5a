@@ -76,6 +76,11 @@ def compare(before_path, after_path, before_manifest, after_manifest):
         return 2, {'status': 'NOT_PROVEN', 'reason': 'capture unavailable: ' + str(exc)}
     if not before or not after:
         return 2, {'status': 'NOT_PROVEN', 'reason': 'empty enriched XML capture'}
+    try:
+        ET.fromstring(before)
+        ET.fromstring(after)
+    except ET.ParseError as exc:
+        return 2, {'status': 'NOT_PROVEN', 'reason': 'invalid enriched XML: ' + str(exc)}
     base = {'baselineSha256': sha(before), 'candidateSha256': sha(after),
             'baselineBytes': len(before), 'candidateBytes': len(after),
             'baselineCommit': b_meta['commit'], 'candidateCommit': a_meta['commit']}
