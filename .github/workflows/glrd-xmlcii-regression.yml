@@ -22,6 +22,11 @@ jobs:
           curl --retry 3 --fail --location --silent --show-error "$root/STF_2026Nov03-0839_managed_stage.json" -o /tmp/glrd-reference/stage.json
           sha256sum /tmp/glrd-reference/*
           wc -c /tmp/glrd-reference/*
+      - name: Preserve source evidence
+        run: |
+          mkdir -p /tmp/glrd-replay/reference
+          cp /tmp/glrd-reference/linelist.xlsx /tmp/glrd-replay/reference/STD-00-PX-4338-01001-0001-02.xlsx
+          cp /tmp/glrd-reference/stage.json /tmp/glrd-replay/reference/STF_2026Nov03-0839_managed_stage.json
       - name: Create untouched-main baseline first
         run: |
           git worktree add --detach /tmp/glrd-main origin/main

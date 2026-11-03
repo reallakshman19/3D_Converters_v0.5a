@@ -24,6 +24,33 @@ def assert_close(actual, expected, label, tolerance=1e-4):
     for x, y in zip(actual, expected):
         assert math.isclose(x, y, rel_tol=0, abs_tol=tolerance), f"{label}: {actual} != {expected}"
 
+def reconstruct_geometry(sections, anchors):
+    from collections import defaultdict, deque
+    rows = sections["ELEMENTS"]
+    assert len(rows) % 15 == 0, "ELEMENTS must contain complete 15-line records"
+    neighbors = defaultdict(list)
+    for index in range(0, len(rows), 15):
+        line = rows[index]
+        fields = [line[:15]] + [line[15 + k * 13:28 + k * 13] for k in range(5)]
+        left, right = (int(float(fields[k])) for k in range(2))
+        delta = tuple(float(v) for v in fields[2:5])
+        neighbors[left].append((right, delta))
+        neighbors[right].append((left, tuple(-value for value in delta)))
+    positions = {int(n): tuple(p) for n, p in anchors.items()}
+    queue = deque(positions)
+    while queue:
+        node = queue.popleft()
+        for target, delta in neighbors[node]:
+            point = tuple(positions[node][i] + delta[i] for i in range(3))
+            if target in positions:
+                assert_close(positions[target], point, f"Conflicting CII geometry at node {target}", tolerance=0.05)
+                continue
+            positions[target] = point
+            queue.append(target)
+    assert set(positions) == set(neighbors), "Unanchored CII component or missing ELEMENTS node"
+    return positions
+
+
 def run(before, after, out):
     out.mkdir(parents=True, exist_ok=True)
     summary = {"cases": {}}
@@ -42,6 +69,12 @@ def run(before, after, out):
                 continue
             assert before_sections[section] == after_sections[section], f"{kind}: unexpected changes in {section}"
         before_coords, after_coords = b["coords"], a["coords"]
+        reconstructed_before = reconstruct_geometry(before_sections, before_coords)
+        reconstructed_after = reconstruct_geometry(after_sections, after_coords)
+        assert len(reconstructed_before) == len(reconstructed_after)
+        for node_id, expected in ((10, expected_10), (460, expected_460)):
+            assert_close(reconstructed_before.get(node_id), expected, f"{kind}: pre-fix reconstructed node {node_id}", tolerance=0.05)
+            assert_close(reconstructed_after.get(node_id), expected, f"{kind}: fixed reconstructed node {node_id}", tolerance=0.05)
         for node, xyz in before_coords.items():
             assert after_coords.get(node) == xyz, f"{kind}: prior anchor changed/lost node={node}"
         assert_close(after_coords.get("10"), expected_10, f"{kind}: Node 10 coordinate")
@@ -75,7 +108,18 @@ def run(before, after, out):
             "node460MassKg": expected_mass,
             "node460CiiWeightN": matches[0]["ciiMassForceN"],
             "ciiDiffLines": len(cii_diff),
+            "reconstructedCiiNodes": len(reconstructed_after),
         }
+    raw_sections = records(after / "raw.cii")
+    reviewed_sections = records(after / "reviewed.cii")
+    for section in raw_sections:
+        if section != "RIGID":
+            assert raw_sections[section] == reviewed_sections[section], f"Weight review changed non-RIGID {section}"
+    raw_rigids, reviewed_rigids = raw_sections["RIGID"], reviewed_sections["RIGID"]
+    changed = [(left, right) for left, right in zip(raw_rigids, reviewed_rigids) if left != right]
+    assert len(changed) == 1, f"Expected exactly one changed RIGID auxiliary row, got {len(changed)}"
+    assert_close([float(changed[0][1].split()[0])], [1239.74], "Node 460 CII rigid weight")
+    summary["singleRigidAuxWeightChanged"] = True
     (out / "comparison.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
 
