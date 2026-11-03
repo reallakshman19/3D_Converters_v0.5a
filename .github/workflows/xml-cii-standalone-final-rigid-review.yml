@@ -16,6 +16,7 @@ jobs:
       - name: Exercise actual standalone empirical A1/A2 ±50% API, dialog and engine-runner custody
         run: |
           node tests/xml-cii-standalone-final-rigid-review-e2e.test.mjs
+          node tests/xml-cii-output-empirical-review.test.mjs
           node tests/xml-cii-final-weight-audit.test.mjs
           node tests/xml-cii-mode-a-consolidated-rigid-review.test.mjs
           node tests/xml-cii-preview-run-parity-closure.test.mjs
@@ -26,6 +27,8 @@ jobs:
             tabs/xml-cii-2019-standalone/xml-cii-final-rigid-weight-review-gate.js \
             tabs/xml-cii-2019-standalone/xml-cii-workflow-service.js \
             tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-final-rigid-weight-popup.js \
+            tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-output-empirical-review.js \
+            tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-output-run.js \
             tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-run-workflow.js \
             tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-run-workflow-atta-default.js; do
             node --check "$file"
