@@ -9,7 +9,11 @@
 
 import { enrichStandaloneDtxrAnnotations } from './xml-cii-standalone-dtxr-enrichment.js';
 import { createStandaloneRunParityEvidence } from './xml-cii-run-parity-evidence.js';
-import { qualifiedXmlCiiRigidAutoWeightCandidate } from '../../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
+import { createEmpiricalWeightValidator } from '../../converters/empirical-weight/empirical-weight-validation.js';
+import {
+  XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT,
+  xmlCiiEmpiricalWeightValidationInput,
+} from '../../converters/xml-cii2019-core/rigid-weight-final-validation.js';
 
 const PARITY_MODULE_URL = new URL(
   '../model-converters/converters/xmltocii2019_helper/enrichment-run-parity.js',
@@ -76,32 +80,48 @@ const WEIGHT_BEARING_TYPES = new Set(['FLAN', 'VALV', 'RIGID', 'INST']);
 export function mappedNodeWeights(nodeRows, config) {
   const weights = new Map();
   const reviewProposals = [];
+  const masters = Array.isArray(config?.weight?.masterRows) && config.weight.masterRows.length
+    ? { masterRows: config.weight.masterRows } : {};
+  const validator = createEmpiricalWeightValidator(masters);
   for (const nr of nodeRows || []) {
     if (!WEIGHT_BEARING_TYPES.has(text(nr.componentType).toUpperCase())) continue;
     const override = Number(config?.overrides?.rigidWeight?.[nr.key]);
     const proposed = nr.weightMatch && !nr.weightMatch.zeroFallback ? Number(nr.weightMatch.weight) : NaN;
-    const hasOverride = Number.isFinite(override) && override > 0;
-    const best = nr.weightCandidates?.[0] || nr.weightMatch || null;
-    const qualified = qualifiedXmlCiiRigidAutoWeightCandidate({ ...nr, ranking: { best } });
-    const shortHeavy = Number(nr.lengthMm) > 6 && Number(nr.lengthMm) <= 40 && proposed >= 10;
-    // No ranked, inferred or extrapolated proposal is permitted to become a
-    // physical node mass merely because Preview selected a "best" candidate.
-    const isDirectApproved = qualified
-      && Math.abs(qualified.weightKg - proposed) < 1e-9
-      && !shortHeavy;
-    if (hasOverride || (Number.isFinite(proposed) && proposed > 0 && isDirectApproved)) {
-      weights.set(`${text(nr.branchName)}|${text(nr.nodeNumber)}`, hasOverride ? override : proposed);
-    } else if (Number.isFinite(proposed) && proposed > 0) {
-      reviewProposals.push({
-        key: text(nr.key), branchName: text(nr.branchName),
-        toNode: text(nr.nodeNumber), componentType: text(nr.componentType),
-        componentRefNo: text(nr.componentRefNo), endpoint: text(nr.endpoint),
-        elementLengthMm: Number(nr.lengthMm) || null, proposedWeightKg: proposed,
-        currentWeightKg: 0, candidate: best,
-        weightOrigin: 'unreviewed-preview-weight-proposal',
-        reviewFlags: [shortHeavy ? 'SHORT_HEAVY_WEIGHT_CANDIDATE' : 'UNQUALIFIED_AUTO_WEIGHT_PROPOSAL'],
-      });
+    if (Number.isFinite(override) && override > 0) {
+      weights.set(`${text(nr.branchName)}|${text(nr.nodeNumber)}`, override);
+      continue;
     }
+    if (!Number.isFinite(proposed) || proposed <= 0) continue;
+    const best = nr.weightCandidates?.[0] || nr.weightMatch || null;
+    const input = xmlCiiEmpiricalWeightValidationInput({
+      branchName: nr.branchName, toNode: nr.nodeNumber, componentRefNo: nr.componentRefNo,
+      boreMm: nr.boreMm, rating: nr.rating, massKg: proposed,
+      weightOrigin: 'preview-weight-match',
+    }, {
+      ...nr, candidates: nr.weightCandidates || [], weightMatch: nr.weightMatch,
+      candidate: best,
+    });
+    const evidence = validator.validate(input, {
+      abnormalityThresholdPct: XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT,
+    });
+    if (evidence.status !== 'UNVALIDATED' && !evidence.reportableAbnormality) {
+      weights.set(`${text(nr.branchName)}|${text(nr.nodeNumber)}`, proposed);
+      continue;
+    }
+    // Empirical evidence, not arbitrary length/mass or rank thresholds,
+    // determines whether a proposed fallback needs reviewer confirmation.
+    reviewProposals.push({
+      key: text(nr.key), branchName: text(nr.branchName),
+      toNode: text(nr.nodeNumber), componentType: text(nr.componentType),
+      componentRefNo: text(nr.componentRefNo), endpoint: text(nr.endpoint),
+      elementLengthMm: nr.lengthMm ?? null, proposedWeightKg: proposed,
+      currentWeightKg: 0, candidate: best,
+      empiricalEvidence: evidence,
+      weightOrigin: 'empirical-review-required-preview-proposal',
+      reviewFlags: [evidence.reportableAbnormality
+        ? 'EMPIRICAL_A1_A2_ABNORMAL_GT_50_PERCENT'
+        : 'EMPIRICAL_VALIDATION_UNAVAILABLE'],
+    });
   }
   return { weights, reviewProposals };
 }
