@@ -1,0 +1,51 @@
+name: GLRD Weight Match preview performance and enriched XML custody
+on:
+  push:
+    branches:
+      - fix/xml-cii-weightmatch-preview-perf-20261103
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  glrd-weight-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load real GLRD files and unchanged weight master
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/glrd-preview/inputs /tmp/glrd-preview/results
+          root="https://raw.githubusercontent.com/reallakshman19/3D_Converters/main/Benchmarks/XML-CII-2019/revamped"
+          curl --retry 3 -fsSL "$root/GLRD-1000-PSI-02.xml" -o /tmp/glrd-preview/inputs/source.xml
+          curl --retry 3 -fsSL "$root/STD-00-PX-4338-01001-0001-02.xlsx" -o /tmp/glrd-preview/inputs/linelist.xlsx
+          curl --retry 3 -fsSL "$root/STF_2026Nov03-0839_managed_stage.json" -o /tmp/glrd-preview/inputs/stage.json
+          curl --retry 3 -fsSL "https://raw.githubusercontent.com/reallakshman19/3D_Converters/25db94769994751bb0fb6e6d83a578efd9ac8162/docs/docs/Masters/wtValveweights.json" -o /tmp/glrd-preview/inputs/weight-master.json
+          sha256sum /tmp/glrd-preview/inputs/* | tee /tmp/glrd-preview/results/source-sha256.txt
+      - name: Generate actual pre-fix baseline enriched XML from real inputs
+        run: |
+          set -euo pipefail
+          python3 tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-preview/inputs/source.xml --staged /tmp/glrd-preview/inputs/stage.json --linelist /tmp/glrd-preview/inputs/linelist.xlsx --out /tmp/glrd-preview/results --label real-run
+          cp /tmp/glrd-preview/results/real-run/raw-enriched.xml /tmp/glrd-preview/results/GLRD-enriched.xml
+          cp /tmp/glrd-preview/results/real-run/raw.cii /tmp/glrd-preview/results/GLRD.cii
+          sha256sum /tmp/glrd-preview/results/GLRD-enriched.xml /tmp/glrd-preview/results/GLRD.cii
+      - name: Weight Match profiling with real GLRD / master
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock --ignore-scripts jsdom@26
+          PYTHONPATH=tests python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from glrd_xmlcii_external_reference import linelist_config
+          p=Path('/tmp/glrd-preview/inputs')
+          config=linelist_config(p/'linelist.xlsx')
+          (p/'weight-config.json').write_text(json.dumps(config))
+          PY
+          node tests/glrd_weight_match_preview_profile.mjs --source /tmp/glrd-preview/inputs/source.xml --staged /tmp/glrd-preview/inputs/stage.json --master /tmp/glrd-preview/inputs/weight-master.json --config /tmp/glrd-preview/inputs/weight-config.json --out /tmp/glrd-preview/results --label baseline
+      - name: Upload raw baseline enriched XML, CII and Weight Match profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glrd-weight-match-preview-${{ github.sha }}
+          path: /tmp/glrd-preview/results/
+          if-no-files-found: warn
