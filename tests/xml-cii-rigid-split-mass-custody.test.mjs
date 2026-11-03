@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { JSDOM } from 'jsdom';
 import { applyXmlCiiSplitRigidWeightPropagation } from '../converters/xml-cii2019-core/split-rigid-weight-propagation.js';
+import { enforceStandaloneFinalRigidWeightReview } from '../tabs/xml-cii-2019-standalone/xml-cii-final-rigid-weight-review-gate.js';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
 globalThis.DOMParser = dom.window.DOMParser;
@@ -58,6 +59,17 @@ for (const pair of [[15, 15], [15, -3]]) {
   assert.equal(result.ownershipIssues.length, 1, 'conflicting ownership must fail the split audit');
   assert.equal(result.ownershipIssues[0].allocationType, 'UNKNOWN');
 }
+// The separate standalone route must reject the same duplicate ownership
+// before any Python converter invocation; empirical review cannot waive it.
+const duplicated = sample.replace('<Weight>0</Weight>', '<Weight>15</Weight>');
+const rejected = await enforceStandaloneFinalRigidWeightReview(
+  { xmlText: duplicated, nodeRows: [], reviewProposals: [] },
+  { sourceName: 'split-ownership.xml', supportConfigJson: '{}', options: { kgToNewton: true } },
+  {},
+);
+assert.equal(rejected.ok, false, 'standalone export must fail closed on duplicated split masses');
+assert.match(rejected.error, /Structural RIGID mass ownership unresolved/);
+
 const missing = sample.replace('<Weight>0</Weight>', '');
 assert.equal(applyXmlCiiSplitRigidWeightPropagation(missing).xmlText, missing, 'missing weights must not silently receive copied mass');
 const zero = sample.replace('<Weight>15</Weight>', '<Weight>0</Weight>');
