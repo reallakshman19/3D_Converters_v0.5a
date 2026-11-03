@@ -4,8 +4,52 @@ import { createElement, createOption, downloadTextFile } from './xml-cii-adapted
 import { updateWorkflowOptions, applyStandaloneOutputRunReadiness, updateWorkflowState, xmlCiiEnrichedConfigFromState } from './xml-cii-adapted-state.js';
 import { deriveLineKeyFromBranchName } from '../../../converters/xml-cii2019-core/regex-line-key.js';
 import { renderAdaptedCiiPreviewCanvas } from './xml-cii-adapted-cii-preview-canvas.js';
+import {
+  outputReviewRawRef,
+  runOutputEmpiricalReviewFromUi,
+} from './xml-cii-adapted-output-empirical-review.js';
+import { digestXmlCiiParityText } from '../xml-cii-run-parity-evidence.js';
 
+const autoReviewFingerprints = new WeakMap();
+const activeReviews = new WeakSet();
 function rows(value) { return Array.isArray(value) ? value : []; }
+
+export function outputEmpiricalReviewFingerprint(state = {}) {
+  const sources = Array.isArray(state.sourceBatch?.sources) && state.sourceBatch.sources.length
+    ? state.sourceBatch.sources.filter((source) => source.enabled !== false).map((source) => [
+        source.sourceId, source.sourceText, source.stagedJsonText,
+        source.supportConfigJson, source.branchSelection, source.workflow,
+      ])
+    : [[state.sourceNameOverride, state.sourceText, state.stagedJsonText,
+      state.supportConfigJson, state.branchSelection, state.previewDiagnosticsAuditReport?.matchedFacts]];
+  return digestXmlCiiParityText(JSON.stringify(sources));
+}
+
+export async function triggerOutputEmpiricalReview(stateRef, {
+  manualInspection = false, onStatus = () => {}, ...options
+} = {}) {
+  const rawRef = outputReviewRawRef(stateRef);
+  if (activeReviews.has(rawRef)) {
+    onStatus('Empirical inspection is already running; use the dialog that is currently opening.');
+    return null;
+  }
+  activeReviews.add(rawRef);
+  try {
+    return await runOutputEmpiricalReviewFromUi(stateRef, {
+      ...options, manualInspection, onStatus,
+    });
+  } catch (error) {
+    const reason = 'Empirical Output / Run inspection could not finish: ' +
+      String(error?.message || error) + '. No weights were silently approved.';
+    onStatus(reason);
+    return { ok: false, error: reason };
+  } finally {
+    // Prevent repeated automatic prompts after the user has just approved a
+    // correction and the workspace re-renders with its new support config.
+    autoReviewFingerprints.set(rawRef, outputEmpiricalReviewFingerprint(rawRef.current));
+    activeReviews.delete(rawRef);
+  }
+}
 function text(value) { return String(value ?? ''); }
 
 function section(parent, title) {
@@ -254,6 +298,27 @@ function renderRunControls(parent, stateRef, state, report, render) {
   runReviewBtn.addEventListener('click', () => { stateRef.current = updateWorkflowState(stateRef.current, { activePhaseId: 'weight-match' }); if (typeof render === 'function') render(); });
   const noteDiv = createElement('div', '', 'model-converters-workflow-detail-note');
   noteDiv.innerHTML = 'Opens <strong>4A Weight Match</strong> to review approximate weights, then Finalize and Run.';
+  const empiricalBtn = button('review-output-empirical-weights',
+    'Review Empirical Weights (±50%) — Inspect All RIGID');
+  empiricalBtn.style.cssText = 'cursor:pointer;padding:12px;border-radius:6px;background:#1e293b;color:#fef3c7;border:1px solid #a16207;font-size:12px;width:100%;text-align:center;font-weight:700;';
+  empiricalBtn.disabled = !!state.running;
+  const empiricalNote = createElement('div', '', 'model-converters-workflow-detail-note');
+  empiricalNote.innerHTML = 'Automatic A1/A2 check opens <strong>Empirical Weight Deviation Review</strong> if a post-enrichment RIGID mass differs by more than <strong>±50%</strong> or cannot be validated. Use the button any time to inspect <strong>all positive RIGID edges, including compliant 19.1 mm elements</strong>, without running Python. Only selected manual edits are saved.';
+  const empiricalStatus = createElement('div', '', 'xml-cii-phase-help');
+  empiricalStatus.dataset.outputEmpiricalStatus = 'true';
+  const status = (message) => {
+    empiricalStatus.textContent = message;
+    empiricalStatus.style.color = /failed|blocked|could not|cancelled/i.test(message) ? '#fca5a5' : '#bfdbfe';
+  };
+  empiricalBtn.addEventListener('click', async () => {
+    empiricalBtn.disabled = true;
+    try {
+      await triggerOutputEmpiricalReview(stateRef, { manualInspection: true, onStatus: status });
+    } finally {
+      empiricalBtn.disabled = false;
+      if (typeof render === 'function') render();
+    }
+  });
   const refreshBtn = button('refresh-output-run', 'Refresh readiness / checklist');
   refreshBtn.style.cssText = 'cursor:pointer;padding:12px;border-radius:6px;background:#1e293b;color:#cbd5e1;border:1px solid #334155;font-size:12px;width:100%;text-align:center;font-weight:700;';
   refreshBtn.addEventListener('click', () => { stateRef.current = applyStandaloneOutputRunReadiness(stateRef.current, buildStandaloneOutputRunReadiness(stateRef.current)); if (typeof render === 'function') render(); });
@@ -261,8 +326,25 @@ function renderRunControls(parent, stateRef, state, report, render) {
   if (finalizeBtn.style) Object.assign(finalizeBtn.style, { width: '100%', padding: '12px', background: (state.running || report.summary.blockingCount > 0) ? '#334155' : '#1e4ed8', color: '#fff', border: 'none', fontWeight: '700' });
   finalizeBtn.disabled = !!(state.running || report.summary.blockingCount > 0);
   finalizeBtn.dataset.action = 'run';
-  actionDiv.append(runReviewBtn, noteDiv, refreshBtn, finalizeBtn);
+  actionDiv.append(runReviewBtn, noteDiv, empiricalBtn, empiricalNote, empiricalStatus, refreshBtn, finalizeBtn);
   ctrlCard.appendChild(actionDiv);
+  // Entering Output / Run automatically checks the post-enrichment physical
+  // owner masses once per source/config revision. Manual inspection remains
+  // available even if no empirical exception exists.
+  if (!state.running && (state.sourceText || state.sourceFile ||
+      state.sourceBatch?.sources?.some((source) => source.enabled !== false))) {
+    const rawRef = outputReviewRawRef(stateRef);
+    const fingerprint = outputEmpiricalReviewFingerprint(rawRef.current);
+    if (autoReviewFingerprints.get(rawRef) !== fingerprint && !activeReviews.has(rawRef)) {
+      autoReviewFingerprints.set(rawRef, fingerprint);
+      Promise.resolve().then(async () => {
+        if (rawRef.current.activePhaseId !== 'run') return;
+        if (outputEmpiricalReviewFingerprint(rawRef.current) !== fingerprint) return;
+        await triggerOutputEmpiricalReview(stateRef, { manualInspection: false, onStatus: status });
+        if (typeof render === 'function') render();
+      });
+    }
+  }
 }
 
 export function renderStandaloneOutputRunPanel(card, stateOrRef, render) {
