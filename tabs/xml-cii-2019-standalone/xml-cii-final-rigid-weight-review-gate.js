@@ -40,6 +40,8 @@ function edgeReviewIssue(row, nodeRows) {
     elementLengthMm: row.elementLengthMm,
     wholeComponentSpanMm: row.wholeComponentSpanMm,
     currentWeightKg: row.massKg,
+    ownerWeightState: row.ownerWeightState || 'POSITIVE',
+    ownerWeightRaw: row.ownerWeightRaw ?? '',
     proposedWeightKg: positive(preview?.weightMatch?.weight),
     exportedWeight: row.exportedWeight,
     exportedUnit: row.exportedUnit,
@@ -87,11 +89,10 @@ export function buildStandaloneFinalRigidReview(parity, config = {}, options = {
     [...collectXmlCiiWeightMatchRows(xmlText, options.stagedJsonText || '', config), ...(parity?.nodeRows || [])],
     config?.weight?.masterRows || [],
   );
-  // Optional inspector in Output / Run is deliberately broader than the
-  // export blocker: it shows every positive physical RIGID element (including
-  // empirically normal 19.1 mm edges) without changing the release policy.
+  // Manual inspection enumerates every pre-Python RIGID candidate, including
+  // zero/missing/invalid owners. Only the positive subset enters A1/A2.
   const selectedRows = options.includeAllPositiveMasses
-    ? audit.rows
+    ? (audit.allRows || audit.rows)
     : audit.rows.filter(isReviewRequired);
   const issues = selectedRows.map((row) => edgeReviewIssue(row, parity?.nodeRows));
   const byKey = new Map(issues.map((issue) => [issue.key, issue]));
@@ -161,6 +162,19 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   );
   // Empirical plausibility never overrides a split component with multiple
   // positive or invalid sibling masses. Do not run Python with ambiguous owners.
+  const malformedRigdOwners = (gate.audit?.allRows || []).filter(
+    (row) => ['MISSING', 'INVALID', 'NEGATIVE'].includes(row.ownerWeightState)
+  );
+  if (malformedRigdOwners.length) {
+    const first = malformedRigdOwners[0];
+    return {
+      ok: false,
+      error: `Invalid or missing RIGID mass on ${malformedRigdOwners.length} pre-Python edge(s). ` +
+        `Example: ${first.branchName} / ${first.fromNode} → ${first.toNode} (${first.ownerWeightState}). ` +
+        'Structural ownership must be resolved before Python export.',
+      ...gate,
+    };
+  }
   const structural = gate.splitCustody?.ownershipIssues || [];
   if (structural.length) {
     const first = structural[0];
