@@ -30,6 +30,19 @@ jobs:
           python3 tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-preview/inputs/source.xml --staged /tmp/glrd-preview/inputs/stage.json --linelist /tmp/glrd-preview/inputs/linelist.xlsx --out /tmp/glrd-preview/results --label real-run
           cp /tmp/glrd-preview/results/real-run/raw-enriched.xml /tmp/glrd-preview/results/GLRD-enriched.xml
           cp /tmp/glrd-preview/results/real-run/raw.cii /tmp/glrd-preview/results/GLRD.cii
+          cp /tmp/glrd-preview/results/real-run/raw.rigid_ledger.json /tmp/glrd-preview/results/GLRD.rigid_ledger.json
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          base=Path('/tmp/glrd-preview/results')
+          manifest=json.loads((base/'GLRD.rigid_ledger.json').read_text())
+          assert manifest['schema']=='xml-cii-rigid-python-emission-ledger/v1'
+          assert manifest['ciiSha256']==hashlib.sha256((base/'GLRD.cii').read_bytes()).hexdigest()
+          assert manifest['summary']['rigidAuxCount']==len(manifest['rows'])
+          assert any(row['weightState']=='ZERO' for row in manifest['rows'])
+          assert all(row['rigidAuxIndex']==i for i,row in enumerate(manifest['rows'],1))
+          print('GLRD_ALL_ACTUAL_PYTHON_RIGID_AUX_RECONCILED', json.dumps(manifest['summary']))
+          PY
           sha256sum /tmp/glrd-preview/results/GLRD-enriched.xml /tmp/glrd-preview/results/GLRD.cii
       - name: Weight Match profiling with real GLRD / master
         run: |
@@ -163,6 +176,8 @@ jobs:
           node tests/xml-cii-standalone-final-rigid-review-e2e.test.mjs
           node tests/xml-cii-mode-a-consolidated-rigid-review.test.mjs
           node tests/xml-cii-preview-run-parity-closure.test.mjs
+          python3 -m py_compile converters/scripts/xml_to_cii2019.py converters/scripts/xml_to_cii2019_runtime_custody.py converters/scripts/xml_to_cii2019_rigid_ledger.py
+          python3 tests/xml-cii-rigid-python-emission-ledger.test.py
           python3 tests/xml-cii-runtime-custody.test.py
       - name: Upload raw baseline enriched XML, CII and Weight Match profile
         if: always()
