@@ -113,6 +113,10 @@ export function buildXmlCiiFlangeWeightFallback(issue, config) {
   if (!reference) return null;
 
   const ratio = targetLength / Number(reference.rowLength);
+  const minRatio = Number(config?.weight?.extrapolationMinRatio ?? 0.65);
+  const maxRatio = Number(config?.weight?.extrapolationMaxRatio ?? 1.6);
+  if (!Number.isFinite(minRatio) || !Number.isFinite(maxRatio) ||
+      minRatio <= 0 || maxRatio < minRatio || ratio < minRatio || ratio > maxRatio) return null;
   const proposedWeight = roundWeight(Number(reference.weight) * ratio);
   if (!Number.isFinite(proposedWeight) || proposedWeight <= 0) return null;
 
