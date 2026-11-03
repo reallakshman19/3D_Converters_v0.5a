@@ -1,116 +1,134 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { auditXmlCiiRigidWeightsFromBranches } from '../converters/xml-cii2019-core/rigid-weight-export-audit.js';
 import {
-  auditXmlCiiRigidWeightsFromBranches,
-} from '../converters/xml-cii2019-core/rigid-weight-export-audit.js';
-import {
+  XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT,
   validateXmlCiiFinalRigidWeightAudit,
 } from '../converters/xml-cii2019-core/rigid-weight-final-validation.js';
 import {
   qualifiedXmlCiiRigidAutoWeightCandidate,
   collectXmlCiiAutoRigidWeightsFromIssues,
+  xmlCiiWeightSuggestionConfidence,
+  XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT,
+  XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT,
 } from '../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
 import {
   createEmpiricalWeightValidator,
+  compareObservedWeightToEmpiricalEstimate,
 } from '../converters/empirical-weight/empirical-weight-validation.js';
 
+assert.equal(XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT, 50);
+assert.equal(XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT, 60);
+assert.equal(XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT, 100);
+assert.equal(xmlCiiWeightSuggestionConfidence({score:60}),0.60);
+assert.equal(xmlCiiWeightSuggestionConfidence({score:0.599}),0.599);
+assert.equal(xmlCiiWeightSuggestionConfidence({score:100}),1);
+assert.equal(xmlCiiWeightSuggestionConfidence({score:101}),null);
+// The API defines strict >±50% deviation from the ESTIMATE, not from the
+// observed mass; exact endpoints are within threshold.
+for (const [observed, abnormal] of [[5,false],[15,false],[4.99,true],[15.01,true]]) {
+  const result = compareObservedWeightToEmpiricalEstimate(observed, {
+    ok:true,weightKg:10,approach:'A1_SIZE_BAND',
+  }, XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT);
+  assert.equal(result.abnormal,abnormal,`${observed} kg vs estimated 10 kg`);
+  assert.equal(result.thresholdPct,50);
+}
 const fixture = [{
-  branchName: 'B-939',
-  nodes: [
-    { nodeNumber: '930', componentType: 'FLAN', componentRefNo: '=FLANGE-1', endpoint: '1', rigid: '0', position: '0 0 0', weight: 0 },
-    { nodeNumber: '939', componentType: 'PIPE', componentRefNo: '=PIPE-1', endpoint: '0', rigid: '0', position: '89.9 0 0', weight: 0 },
-    { nodeNumber: '10020', componentType: 'RIGID', componentRefNo: '=FLANGE-1', endpoint: '2', rigid: '2', position: '109 0 0', weight: 15, boreMm: 50, rating: '900' },
+  branchName:'B-939',
+  nodes:[
+    {nodeNumber:'930',componentType:'FLAN',componentRefNo:'=FLANGE-1',endpoint:'1',position:'0 0 0',weight:0},
+    {nodeNumber:'939',componentType:'PIPE',componentRefNo:'=PIPE-1',position:'89.9 0 0',weight:0},
+    {nodeNumber:'10020',componentType:'RIGID',componentRefNo:'=FLANGE-1',endpoint:'2',rigid:2,
+      position:'109 0 0',weight:15,boreMm:50,rating:'900',nodeName:'Weldneck Flange'},
   ],
 }];
-const audit = auditXmlCiiRigidWeightsFromBranches(fixture, {
-  kgToNewton: true,
-  propagationRows: [{ branchName: 'B-939', nodeNumber: '10020', componentRefNo: '=FLANGE-1', endpoint: '2', weight: 15 }],
+const audit = auditXmlCiiRigidWeightsFromBranches(fixture,{
+  kgToNewton:true,
+  propagationRows:[{branchName:'B-939',nodeNumber:'10020',componentRefNo:'=FLANGE-1',endpoint:'2',weight:15}],
 });
-assert.equal(audit.summary.positiveRigidEdges, 1);
-assert.equal(audit.summary.postReviewPropagatedEdges, 1);
-assert.equal(audit.summary.flaggedEdges, 1);
-const row = audit.rows[0];
-assert.equal(row.fromNode, '939');
-assert.equal(row.toNode, '10020');
-assert.equal(row.massKg, 15);
-assert.equal(row.exportedWeight, 150);
-assert.equal(row.exportedUnit, 'N');
-assert.ok(Math.abs(row.elementLengthMm - 19.1) < 1e-8);
-assert.equal(row.wholeComponentSpanMm, 109);
-assert.ok(Math.abs(row.lengthRatio - 19.1 / 109) < 1e-9);
-assert.ok(row.reviewFlags.includes('FULL_COMPONENT_WEIGHT_ON_SHORT_RIGID_ELEMENT'));
-assert.ok(row.reviewFlags.includes('POST_REVIEW_WEIGHT_PROPAGATION'));
+assert.equal(audit.summary.positiveRigidEdges,1);
+const edge=audit.rows[0];
+assert.equal(edge.fromNode,'939');assert.equal(edge.toNode,'10020');
+assert.equal(edge.massKg,15);assert.equal(edge.exportedWeight,150);
+assert.equal(edge.exportedUnit,'N');assert.ok(Math.abs(edge.elementLengthMm-19.1)<1e-8);
+assert.equal(edge.wholeComponentSpanMm,109);
+assert.ok(!edge.reviewFlags.includes('FULL_COMPONENT_WEIGHT_ON_SHORT_RIGID_ELEMENT'));
+assert.ok(!edge.reviewFlags.includes('SHORT_HEAVY_RIGID_ELEMENT_REQUIRES_REVIEW'));
+assert.ok(edge.reviewFlags.includes('POST_REVIEW_WEIGHT_PROPAGATION'));
+assert.equal(auditXmlCiiRigidWeightsFromBranches(fixture,{kgToNewton:false}).rows[0].exportedWeight,15);
 
-const duplicate = structuredClone(fixture);
-duplicate[0].nodes.push({
-  nodeNumber: '10030', componentType: 'RIGID', componentRefNo: '=FLANGE-1',
-  endpoint: '0', rigid: '2', position: '120 0 0', weight: 15,
+const mockValidator={buildReport(inputs,opts){
+  assert.equal(inputs.length,1);assert.equal(inputs[0].observedWeightKg,15);
+  assert.equal(opts.abnormalityThresholdPct,50);
+  assert.equal(opts.leaveTargetCellOutOfA2,true);
+  return {rows:[{status:'ABNORMAL_A1',reportableAbnormality:true,
+    approach1:{available:true,estimatedWeightKg:5,deviationPct:200,abnormal:true},
+    approach2:{available:true,estimatedWeightKg:15,deviationPct:0,abnormal:false}}]};
+}};
+const mockValidated=validateXmlCiiFinalRigidWeightAudit(audit,[],[],{validator:mockValidator});
+assert.equal(mockValidated.summary.empiricalAbnormalEdges,1);
+assert.equal(mockValidated.rows[0].empiricalStatus,'ABNORMAL_A1');
+assert.ok(mockValidated.rows[0].reviewFlags.includes('EMPIRICAL_A1_A2_ABNORMAL_GT_50_PERCENT'));
+assert.equal(mockValidated.rows[0].empiricalEvidence.approach1.deviationPct,200);
+const unavailable=validateXmlCiiFinalRigidWeightAudit(audit,[],[],{
+ validator:{buildReport:()=>({rows:[{status:'UNVALIDATED',reportableAbnormality:false,
+  approach1:{available:false},approach2:{available:false}}]})},
 });
-const duplicateAudit = auditXmlCiiRigidWeightsFromBranches(duplicate);
-assert.equal(duplicateAudit.summary.repeatedMassEdges, 2);
-assert.equal(duplicateAudit.summary.flaggedEdges, 2);
-assert.equal(auditXmlCiiRigidWeightsFromBranches(fixture, { kgToNewton: false }).rows[0].exportedWeight, 15);
-
-const validator = { buildReport(inputs, options) {
-  assert.equal(inputs.length, 1);
-  assert.equal(inputs[0].observedWeightKg, 15);
-  assert.equal(options.abnormalityThresholdPct, 30);
-  assert.equal(options.leaveTargetCellOutOfA2, true);
-  return { rows: [{
-    reportableAbnormality: true, status: 'ABNORMAL_A1',
-    approach1: { deviationPct: 87.5 }, approach2: { deviationPct: null },
-  }] };
-} };
-const validated = validateXmlCiiFinalRigidWeightAudit(audit, [], [], { validator });
-assert.equal(validated.summary.empiricalAbnormalEdges, 1);
-assert.equal(validated.rows[0].empiricalStatus, 'ABNORMAL_A1');
-assert.ok(validated.rows[0].reviewFlags.includes('EMPIRICAL_A1_A2_ABNORMAL_GT_30_PERCENT'));
-const unavailable = validateXmlCiiFinalRigidWeightAudit(audit, [], [], {
-  validator: { buildReport: () => ({ rows: [{ status: 'UNVALIDATED', reportableAbnormality: false, approach1: {}, approach2: {} }] }) },
-});
-assert.equal(unavailable.summary.empiricalUnvalidatedEdges, 1);
+assert.equal(unavailable.summary.empiricalUnvalidatedEdges,1);
 assert.ok(unavailable.rows[0].reviewFlags.includes('EMPIRICAL_VALIDATION_UNAVAILABLE'));
 
-function issue(score, extra = {}) {
-  return { key: 'B-939:10020', boreMm: 50, rating: 900,
-    ranking: { best: { selectedWeight: 15, score, ratingExact: true,
-      lengthQualified: true, boreDelta: 0, weightMethod: 'direct', ...extra } } };
-}
-assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(0.599)), null);
-assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(0.60))?.weightKg, 15);
-assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(60))?.confidence, 0.60);
-assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(1))?.weightKg, 15);
-assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(0.90, { inferredWeight: true })), null);
-assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(0.95, { lengthQualified: false })), null);
-assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(0.95, { fallbackSuggestion: true })), null);
-assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(0.95, { weightMethod: 'length-extrapolated' })), null);
-assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(0.95, { ratingExact: false })), null);
-assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate({ ...issue(.95), ratingConflict: true }), null);
-const auto = collectXmlCiiAutoRigidWeightsFromIssues([issue(.45), issue(.6), issue(.95, { inferredWeight: true })]);
-assert.equal(auto.appliedCount, 1);
-assert.equal(auto.weightsByKey['B-939:10020'], 15);
-assert.equal(auto.remainingIssues.length, 2);
+// Test the REAL A1 size-band model and A2 leave-target-cell-out matrix API
+// with a known canonical flange family/size/rating, not a mocked formula.
+const empirical=createEmpiricalWeightValidator();
+const observed={rowId:'GLRD-model-900',componentRefNo:'134234934/27950',
+ typeDesc:'Weldneck Flange',ns:2,dn:50,rating:900,target:'RF/RTJ KG',observedWeightKg:15};
+const normal=empirical.validate(observed,{abnormalityThresholdPct:50});
+assert.equal(normal.approach1.available,true,'real A1 size-band estimate required');
+assert.ok(normal.maximumAbsoluteDeviationPct<50,'real 15kg flange must be within ±50%');
+assert.equal(normal.reportableAbnormality,false);
+const high=empirical.validate({...observed,observedWeightKg:150},{abnormalityThresholdPct:50});
+assert.equal(high.reportableAbnormality,true,'real A1/A2 detects 150kg misassignment');
+assert.ok(high.maximumAbsoluteDeviationPct>50);
+const low=empirical.validate({...observed,observedWeightKg:0.1},{abnormalityThresholdPct:50});
+assert.equal(low.reportableAbnormality,true,'real A1/A2 detects underweight outlier');
+assert.equal(high.abnormalityThresholdPct,50);
+console.log('REAL A1/A2 empirical evidence:',JSON.stringify({
+ within:normal.status,above:high.status,below:low.status,
+ a1NormalEstimateKg:normal.approach1.estimatedWeightKg,
+ a2NormalEstimateKg:normal.approach2.estimatedWeightKg,
+ a1HighDeviationPct:high.approach1.deviationPct,
+ a2HighDeviationPct:high.approach2.deviationPct,
+}));
 
-const weightModelSource = readFileSync(new URL('../converters/xml-cii2019-core/weight-match-model.js', import.meta.url), 'utf8');
-assert.ok(weightModelSource.includes('(!reviewEndpoint && !isMapped)'),
-  'positive-weight first endpoints must be visible in Weight Match');
-const runner = readFileSync(new URL('../tabs/model-converters/converters/xmltocii2019_runner.js', import.meta.url), 'utf8');
+function issue(weightKg,score=0.65,typeDesc='Weldneck Flange') {
+  const candidate={weight:weightKg,selectedWeight:weightKg,score,weightMethod:'length-extrapolated',
+    typeDesc,rowData:{TypeDesc:typeDesc,NS:2,DN:50,Rating:900,'RF/RTJ KG':15}};
+  return {key:'B-939::10020',branchName:'B-939',nodeNumber:'10020',
+    boreMm:50,rating:900,componentRefNo:'=FLANGE-1',
+    ranking:{best:candidate},candidates:[candidate]};
+}
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,0.599)),null,
+  'a 59.9% suggestion cannot be automatically applied even when empirical deviation is acceptable');
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,0.60))?.weightKg,15,
+  '60% is included in automatic weight suggestion range');
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,100))?.weightKg,15,
+  '100% is included in automatic weight suggestion range');
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,101)),null,
+  'confidence above 100% cannot be automatically applied');
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,0.65))?.weightKg,15,
+  '65% qualifies independent of physical edge length');
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(150,0.99)),null,
+  'high score must not override a ±50% empirical failure');
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,0.99,'NOT_A_MODEL_FAMILY')),null,
+  'unknown empirical family must fail closed');
+const plan=collectXmlCiiAutoRigidWeightsFromIssues([issue(15,0.59),issue(15,0.60),issue(150,0.99)]);
+assert.equal(plan.appliedCount,1);assert.equal(plan.weightsByKey['B-939::10020'],15);
+assert.equal(plan.remainingIssues.length,2);
+assert.equal(plan.appliedRows[0].method,'confidence-60-to-100-and-empirical-a1-a2-within-50-percent');
+
+const modelSource=readFileSync(new URL('../converters/xml-cii2019-core/weight-match-model.js',import.meta.url),'utf8');
+assert.ok(modelSource.includes('(!reviewEndpoint && !isMapped)'));
+const runner=readFileSync(new URL('../tabs/model-converters/converters/xmltocii2019_runner.js',import.meta.url),'utf8');
 assert.ok(runner.includes('validateXmlCiiFinalRigidWeightAudit('));
-assert.ok(runner.includes('splitWeightPropagation.appliedRows'));
 assert.ok(runner.includes('_rigid_weight_export_audit.json'));
-
-if (process.env.GLRD_WEIGHT_MASTER_PATH) {
-  const masterRows = JSON.parse(readFileSync(process.env.GLRD_WEIGHT_MASTER_PATH, 'utf8'));
-  const empirical = createEmpiricalWeightValidator({ masterRows });
-  const report = empirical.buildReport([{
-    rowId: 'GLRD-node460-900-master',
-    source: 'master-900-scenario', componentRefNo: '=134234934/27950',
-    nodeNumber: '460', typeDesc: 'Weldneck Flange',
-    ns: 2, dn: 50, rating: 900, target: 'RF', observedWeightKg: 15,
-  }]);
-  console.log('REAL GLRD node 460 A1/A2:', JSON.stringify(report.rows[0]));
-  if (process.env.GLRD_WEIGHT_REPORT_OUTPUT) {
-    writeFileSync(process.env.GLRD_WEIGHT_REPORT_OUTPUT, JSON.stringify(report, null, 2) + '\n', 'utf8');
-  }
-}
-console.log('Final rigid export audit and 60%-100% confidence policy: PASS');
+console.log('Separate policies: 60–100% confidence auto-apply + empirical A1/A2 ±50% final rigid review: PASS');

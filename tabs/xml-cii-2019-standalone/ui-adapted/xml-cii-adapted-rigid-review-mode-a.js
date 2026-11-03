@@ -1,5 +1,7 @@
 import { resolveStandaloneWeightReviewRating, standaloneWeightReviewRatingInfo } from './xml-cii-adapted-weight-rating-authority.js';
-import { collectXmlCiiZeroRigidWeightIssues } from '../../../converters/xml-cii2019-core/weight-match-model.js';
+import { collectXmlCiiZeroRigidWeightIssues, collectXmlCiiWeightMatchRows, xmlCiiRigidWeightOverrideKey } from '../../../converters/xml-cii2019-core/weight-match-model.js';
+import { auditXmlCiiRigidWeightsForExport } from '../../../converters/xml-cii2019-core/rigid-weight-export-audit.js';
+import { validateXmlCiiFinalRigidWeightAudit } from '../../../converters/xml-cii2019-core/rigid-weight-final-validation.js';
 import { applyXmlCiiFlangeWeightFallbackToIssue } from '../../../converters/xml-cii2019-core/flange-weight-fallback.js';
 import { rankXmlCiiWeightCandidates } from '../../../converters/xml-cii2019-core/weight-valve-hints.js';
 import { qualifiedXmlCiiRigidAutoWeightCandidate } from '../../../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
@@ -10,7 +12,7 @@ const attr = (value) => esc(value).replace(/'/g, '&#39;');
 const text = (value) => value === undefined || value === null ? '' : String(value).trim();
 
 export async function collectModeARigidWeightReviewIssues(state = {}, config = {}) {
-  return collectXmlCiiZeroRigidWeightIssues(state.sourceText || '', state.stagedJsonText || '', config).map((issue) => {
+  const zeroWeightIssues = collectXmlCiiZeroRigidWeightIssues(state.sourceText || '', state.stagedJsonText || '', config).map((issue) => {
     const authority = resolveStandaloneWeightReviewRating(issue, config);
     const rating = authority.rating;
     const ranking = rating
@@ -24,7 +26,7 @@ export async function collectModeARigidWeightReviewIssues(state = {}, config = {
           dtxr: issue.dtxr,
         }, config, { includeRejected: true })
       : { candidates: [], rejectedCandidates: [] };
-    return applyXmlCiiFlangeWeightFallbackToIssue({
+    const enriched = applyXmlCiiFlangeWeightFallbackToIssue({
       ...issue,
       rating,
       dtxrRating: authority.dtxrRating,
@@ -34,7 +36,44 @@ export async function collectModeARigidWeightReviewIssues(state = {}, config = {
       candidates: ranking.candidates.slice(0, 5),
       rejectedCandidates: ranking.rejectedCandidates.slice(0, 3),
     }, config);
+    const qualified = qualifiedXmlCiiRigidAutoWeightCandidate(enriched, {
+      masterRows: config?.weight?.masterRows,
+    });
+    return { ...enriched, empiricalAutoWeightEvaluated: true,
+      empiricalAutoWeightKg: qualified?.weightKg ?? null };
   }).filter((issue) => !issue.mapped);
+  // Include empirical-deviant *positive* masses in the existing consolidated gate,
+  // rather than showing only zero-weight rows. Late parity-generated weights
+  // are separately enforced by the mandatory final CII-input dialog.
+  const xml = state.sourceText || '';
+  const previewRows = collectXmlCiiWeightMatchRows(xml, state.stagedJsonText || '', config);
+  const checked = validateXmlCiiFinalRigidWeightAudit(
+    auditXmlCiiRigidWeightsForExport(xml, { kgToNewton: state.options?.kgToNewton !== false }),
+    previewRows, config?.weight?.masterRows || [],
+  );
+  const flagged = checked.rows.filter((edge) =>
+    edge.empiricalEvidence?.reportableAbnormality || edge.empiricalStatus === 'UNVALIDATED');
+  const already = new Set(zeroWeightIssues.map((issue) => issue.key));
+  const positiveWeightIssues = flagged.map((edge) => {
+    const match = previewRows.find((row) =>
+      text(row.branchName) === text(edge.branchName)
+      && text(row.nodeNumber) === text(edge.toNode)
+      && text(row.componentRefNo).replace(/^=/, '').toUpperCase() === text(edge.componentRefNo).toUpperCase()
+      && text(row.endpoint) === text(edge.endpoint));
+    const key = match?.key || xmlCiiRigidWeightOverrideKey(edge.branchName, edge.toNode);
+    return {
+      ...(match || {}),
+      key, branchName: edge.branchName, nodeNumber: edge.toNode, nodeNumberDisplay: edge.toNode,
+      componentType: edge.componentType, componentRefNo: edge.componentRefNo,
+      fromNode: edge.fromNode, toNode: edge.toNode,
+      lengthMm: edge.elementLengthMm, weight: edge.massKg, mapped: true,
+      boreMm: edge.boreMm, rating: edge.rating,
+      finalWeightReview: true, reviewFlags: edge.reviewFlags.filter((flag) => flag.startsWith('EMPIRICAL_')),
+      empiricalEvidence: edge.empiricalEvidence,
+      candidates: match?.candidates || [],
+    };
+  }).filter((issue) => !already.has(issue.key));
+  return [...zeroWeightIssues, ...positiveWeightIssues];
 }
 
 function ratingInfo(issue) {
@@ -58,38 +97,40 @@ function candidateButtons(issue, rowIndex) {
 }
 
 function rowMarkup(issue, rowIndex) {
-  const safe = qualifiedXmlCiiRigidAutoWeightCandidate(issue);
+  const safe = issue.empiricalAutoWeightEvaluated
+    ? (issue.empiricalAutoWeightKg !== null ? { weightKg: issue.empiricalAutoWeightKg } : null)
+    : qualifiedXmlCiiRigidAutoWeightCandidate(issue);
   const info = ratingInfo(issue);
   const badge = info.conflict
     ? '<span title="Rating conflict with DTXR" style="color:#fca5a5;font-weight:700;"> !</span>'
     : (info.missingWithDtxr ? '<span title="DTXR Rating available as evidence" style="color:#fbbf24;font-weight:700;"> DTXR</span>' : '');
-  const search = [issue.fileName, issue.alias, issue.branchName, issue.nodeNumberDisplay, issue.nodeNumber, issue.dtxr].map((value) => text(value).toLowerCase()).join(' ');
+  const search = [issue.fileName, issue.alias, issue.branchName, issue.fromNode, issue.nodeNumberDisplay, issue.nodeNumber, issue.dtxr].map((value) => text(value).toLowerCase()).join(' ');
   return `<tr data-mode-a-rigid-review-row data-source-id="${attr(issue.sourceId)}" data-search="${attr(search)}">
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);white-space:nowrap;">${esc(issue.fileName || issue.alias || issue.sourceId)}</td>
     <td title="${attr(issue.branchName)}" style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);min-width:260px;">${esc(issue.branchName)}</td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);">${esc(issue.boreMm == null ? '' : `${Number(issue.boreMm).toFixed(0)} mm`)}</td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);"><input type="text" class="mc-rigid-review-rating-input" data-review-id="${attr(issue.reviewId)}" data-source-id="${attr(issue.sourceId)}" data-issue-key="${attr(issue.key)}" value="${attr(info.shownRating)}" title="${attr(info.title)}" style="width:64px;background:#101827;color:#fff;border:1px solid ${info.conflict || info.missingWithDtxr ? '#ef4444' : '#31455f'};border-radius:4px;padding:4px;font-size:11px;">${badge}</td>
-    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);">${esc(issue.nodeNumberDisplay || issue.nodeNumber)}</td>
+    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);">${esc(issue.fromNode ? `${issue.fromNode} → ${issue.toNode}` : (issue.nodeNumberDisplay || issue.nodeNumber))}${issue.finalWeightReview ? '<div style="color:#fbbf24;font-size:10px;">Empirical deviation &gt; ±50% / unavailable</div>' : ''}</td>
     <td title="${attr(issue.dtxrSourcePath || '')}" style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);min-width:180px;">${esc(issue.dtxr || 'Not found')}</td>
-    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);white-space:nowrap;">${esc(issue.lengthMm == null ? '' : `${Number(issue.lengthMm).toFixed(1)} mm`)}</td>
-    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);"><input type="number" min="0" step="0.001" class="mc-rigid-review-input" data-review-id="${attr(issue.reviewId)}" data-source-id="${attr(issue.sourceId)}" data-issue-key="${attr(issue.key)}" value="${attr(safe?.weightKg ?? '')}" placeholder="kg" style="width:78px;background:#101827;color:#fff;border:1px solid #31455f;border-radius:4px;padding:4px;"></td>
+    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);white-space:nowrap;">${esc(issue.lengthMm == null ? '' : `${Number(issue.lengthMm).toFixed(1)} mm`)}${issue.finalWeightReview ? `<div style="color:#fbbf24;font-size:10px;white-space:normal;">${esc(issue.reviewFlags.join('; '))}</div>` : ''}</td>
+    <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);"><input type="number" min="0" step="0.001" class="mc-rigid-review-input" data-review-id="${attr(issue.reviewId)}" data-source-id="${attr(issue.sourceId)}" data-issue-key="${attr(issue.key)}" value="${attr(issue.finalWeightReview ? issue.weight : (safe?.weightKg ?? ''))}" placeholder="kg" style="width:78px;background:#101827;color:#fff;border:1px solid #31455f;border-radius:4px;padding:4px;"></td>
     <td style="padding:7px;border-bottom:1px solid rgba(148,163,184,.1);min-width:300px;">${candidateButtons(issue, rowIndex) || '<span style="color:#64748b;">No suggestion</span>'}</td>
   </tr>`;
 }
 
-function popupMarkup(rows, entries) {
+export function modeARigidWeightReviewMarkup(rows, entries) {
   const sourceOptions = entries.map((entry) => `<option value="${attr(entry.sourceId)}">${esc(entry.fileName)}</option>`).join('');
-  return `<div class="mc-rigid-review-dialog" role="dialog" aria-modal="true" aria-label="Consolidated rigid zero weight review" style="color:#e2e8f0;max-height:90vh;overflow:auto;background:#0f172a;border:1px solid #253a55;border-radius:8px;padding:18px;max-width:1380px;width:96%;">
+  return `<div class="mc-rigid-review-dialog" role="dialog" aria-modal="true" aria-label="Mode A rigid weight suggestion auto-apply (60–100%) and empirical deviation review (±50%)" style="color:#e2e8f0;max-height:90vh;overflow:auto;background:#0f172a;border:1px solid #253a55;border-radius:8px;padding:18px;max-width:1380px;width:96%;">
     <div style="display:flex;justify-content:space-between;gap:16px;align-items:center;border-bottom:1px solid #253a55;padding-bottom:12px;margin-bottom:12px;">
       <div><div style="font-size:18px;font-weight:700;color:#9cc5ff;">Rigid Weights Need Review — Consolidated</div><div data-mode-a-rigid-summary style="font-size:12px;color:#94a3b8;margin-top:4px;">${rows.length} rigid node(s) across ${entries.length} XML file(s).</div></div>
       <button type="button" data-mode-a-rigid-cancel style="cursor:pointer;background:transparent;border:1px solid #475569;border-radius:6px;color:#94a3b8;padding:6px 12px;">Cancel Batch Run</button>
     </div>
-    <div style="background:#2a210b;border:1px solid #7c5a18;color:#ffe7a3;padding:9px;border-radius:6px;font-size:12px;margin-bottom:10px;">One review gate covers all enabled XML models. Source identity is preserved; Rating and Weight changes are written only to that XML. “Use All Safe Suggestions (60–100%)” fills only direct master candidates with a verified rating, bore and component length. Inferred or lower-confidence suggestions require review. Enter mass in kg; the optional kg→N CII export conversion applies ×10 only at output.</div>
+    <div style="background:#2a210b;border:1px solid #7c5a18;color:#ffe7a3;padding:9px;border-radius:6px;font-size:12px;margin-bottom:10px;">One early review gate covers zero-weight and empirically deviant positive-weight assignments for all enabled XML models. New weights created during final enrichment trigger an additional mandatory final-export review. Source identity is preserved; Rating and Weight changes are written only to that XML. <strong>Suggestion auto-apply: match confidence 60–100%.</strong> The “Apply Eligible Suggestions (60–100%)” action fills only those candidates <strong>also within ±50% of each available empirical A1/A2 estimate</strong>. Below 60%, empirically abnormal, or unvalidated suggestions require explicit manual review. The two percentages are independent policies. Enter mass in kg; the optional kg→N CII export conversion applies ×10 only at output.</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
       <input type="search" data-mode-a-rigid-search placeholder="Search source / branch / node..." style="min-width:250px;padding:6px;background:#0b1220;color:#e2e8f0;border:1px solid #475569;border-radius:5px;">
       <select data-mode-a-rigid-source style="padding:6px;background:#0b1220;color:#e2e8f0;border:1px solid #475569;border-radius:5px;"><option value="">All XML files</option>${sourceOptions}</select>
       <button type="button" data-mode-a-rigid-refresh style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:7px 12px;">Refresh Suggestions</button>
-      <button type="button" data-mode-a-rigid-fill-exact style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:7px 12px;">Use All Safe Suggestions (60–100%)</button>
+      <button type="button" data-mode-a-rigid-fill-exact style="cursor:pointer;background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:6px;padding:7px 12px;">Apply Eligible Suggestions (60–100%)</button>
       <span data-mode-a-rigid-status style="font-size:12px;color:#94a3b8;"></span>
     </div>
     <div style="overflow:auto;max-height:55vh;border:1px solid rgba(148,163,184,.15);border-radius:6px;"><table style="border-collapse:collapse;font-size:12px;width:100%;text-align:left;"><thead><tr style="background:rgba(30,41,59,.55);color:#fff;position:sticky;top:0;z-index:1;"><th style="padding:7px;">Source XML</th><th style="padding:7px;">Branch</th><th style="padding:7px;">Bore</th><th style="padding:7px;">Rating</th><th style="padding:7px;">Node</th><th style="padding:7px;">DTXR</th><th style="padding:7px;">Length</th><th style="padding:7px;">Manual Weight (kg)</th><th style="padding:7px;">Nearest Suggestions</th></tr></thead><tbody data-mode-a-rigid-body>${rows.map(rowMarkup).join('')}</tbody></table></div>
@@ -125,7 +166,7 @@ export function openModeAConsolidatedRigidWeightReviewPopup(entries = []) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'model-converters-workflow-popup-overlay mc-rigid-review-overlay';
-    overlay.innerHTML = popupMarkup(rows, workingEntries);
+    overlay.innerHTML = modeARigidWeightReviewMarkup(rows, workingEntries);
     document.body.appendChild(overlay);
     const body = overlay.querySelector('[data-mode-a-rigid-body]');
     const status = overlay.querySelector('[data-mode-a-rigid-status]');
@@ -156,12 +197,14 @@ export function openModeAConsolidatedRigidWeightReviewPopup(entries = []) {
     overlay.querySelector('[data-mode-a-rigid-fill-exact]')?.addEventListener('click', () => {
       let count = 0;
       rows.forEach((row, index) => {
-        const value = qualifiedXmlCiiRigidAutoWeightCandidate(row)?.weightKg;
+        const value = row.empiricalAutoWeightEvaluated
+          ? row.empiricalAutoWeightKg
+          : qualifiedXmlCiiRigidAutoWeightCandidate(row)?.weightKg;
         if (!Number.isFinite(value) || value <= 0) return;
         const input = overlay.querySelectorAll('.mc-rigid-review-input')[index];
         if (input) { input.value = String(value); count += 1; }
       });
-      setStatus(`Filled ${count} qualified 60–100% direct suggestions; low-confidence, inferred, and length-mismatched weights remain for manual review.`, false);
+      setStatus(`Filled ${count} suggestion(s) with 60–100% match confidence and A1/A2 within ±50%; low-confidence, out-of-range or unavailable weights require manual review.`, false);
     });
 
     overlay.querySelector('[data-mode-a-rigid-refresh]')?.addEventListener('click', async () => {

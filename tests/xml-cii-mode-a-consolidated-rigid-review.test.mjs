@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { xmlCiiRenderWeightMatchPhase } from '../tabs/model-converters/converters/xmltocii2019_helper/weight-match-renderer.js';
+import { modeARigidWeightReviewMarkup } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-rigid-review-mode-a.js';
+import { finalRigidWeightReviewMarkup } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-final-rigid-weight-popup.js';
 import { readFileSync } from 'node:fs';
 import {
   buildModeAPreviewFillPlan,
@@ -69,4 +72,30 @@ for (const path of [
   assert.match(source, /Manual Weight \(kg\)/, `${path} must label manual mass inputs in kg`);
 }
 
-console.log('xml-cii Mode A consolidated rigid review tests: PASS');
+
+// Actual rendered UI contracts, not only string references in source modules.
+const weightMatchHtml=xmlCiiRenderWeightMatchPhase();
+assert.match(weightMatchHtml,/60–100% match confidence/);
+assert.match(weightMatchHtml,/Apply eligible suggestions \(60–100%\)/);
+assert.match(weightMatchHtml,/within ±50%/);
+const finalHtml=finalRigidWeightReviewMarkup([{
+  fromNode:'939',toNode:'10020',branchName:'B-939',componentRefNo:'FLANGE-1',
+  elementLengthMm:19.1,currentWeightKg:150,proposedWeightKg:150,
+  suggestionConfidencePct:59,
+  reviewFlags:['EMPIRICAL_A1_A2_ABNORMAL_GT_50_PERCENT'],
+  empiricalEvidence:{
+    approach1:{available:true,estimatedWeightKg:13.795,deviationPct:987.35,abnormal:true},
+    approach2:{available:true,estimatedWeightKg:13.493,deviationPct:1011.64,abnormal:true},
+  },
+}],{sourceName:'standalone-test.xml'});
+assert.match(finalHtml,/Empirical review threshold: ±50%/);
+assert.match(finalHtml,/60–100% match confidence/);
+assert.match(finalHtml,/59\.0% match confidence/);
+assert.match(finalHtml,/A1 estimate \/ deviation/);
+assert.match(finalHtml,/A2 estimate \/ deviation/);
+const modeAHtml=modeARigidWeightReviewMarkup(flat,entries);
+assert.match(modeAHtml,/Suggestion auto-apply: match confidence 60–100%/);
+assert.match(modeAHtml,/±50%/);
+assert.ok(modeAHtml.includes('Apply Eligible Suggestions (60–100%)'), 'Mode A button must show suggestion confidence range');
+
+console.log('Weight Match 60–100%, Mode A auto-apply 60–100%, and final dialog empirical ±50% UI: PASS');

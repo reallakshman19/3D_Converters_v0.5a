@@ -9,6 +9,16 @@
 
 import { enrichStandaloneDtxrAnnotations } from './xml-cii-standalone-dtxr-enrichment.js';
 import { createStandaloneRunParityEvidence } from './xml-cii-run-parity-evidence.js';
+import { createEmpiricalWeightValidator } from '../../converters/empirical-weight/empirical-weight-validation.js';
+import {
+  XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT,
+  XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT,
+  xmlCiiWeightSuggestionConfidence,
+} from '../../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
+import {
+  XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT,
+  xmlCiiEmpiricalWeightValidationInput,
+} from '../../converters/xml-cii2019-core/rigid-weight-final-validation.js';
 
 const PARITY_MODULE_URL = new URL(
   '../model-converters/converters/xmltocii2019_helper/enrichment-run-parity.js',
@@ -72,20 +82,64 @@ function recordExpected(entries, {
 
 const WEIGHT_BEARING_TYPES = new Set(['FLAN', 'VALV', 'RIGID', 'INST']);
 
-function mappedNodeWeights(nodeRows, config) {
+export function mappedNodeWeights(nodeRows, config) {
   const weights = new Map();
+  const reviewProposals = [];
+  const masters = Array.isArray(config?.weight?.masterRows) && config.weight.masterRows.length
+    ? { masterRows: config.weight.masterRows } : {};
+  const validator = createEmpiricalWeightValidator(masters);
   for (const nr of nodeRows || []) {
     if (!WEIGHT_BEARING_TYPES.has(text(nr.componentType).toUpperCase())) continue;
     const override = Number(config?.overrides?.rigidWeight?.[nr.key]);
-    const auto = nr.weightMatch && !nr.weightMatch.zeroFallback ? Number(nr.weightMatch.weight) : NaN;
-    const weight = Number.isFinite(override) && override > 0 ? override : (Number.isFinite(auto) && auto > 0 ? auto : null);
-    if (weight !== null) weights.set(`${text(nr.branchName)}|${text(nr.nodeNumber)}`, weight);
+    const proposed = nr.weightMatch && !nr.weightMatch.zeroFallback ? Number(nr.weightMatch.weight) : NaN;
+    if (Number.isFinite(override) && override > 0) {
+      weights.set(`${text(nr.branchName)}|${text(nr.nodeNumber)}`, override);
+      continue;
+    }
+    if (!Number.isFinite(proposed) || proposed <= 0) continue;
+    const best = nr.weightCandidates?.[0] || nr.weightMatch || null;
+    const matchConfidence = xmlCiiWeightSuggestionConfidence(best);
+    const eligibleConfidence = matchConfidence !== null
+      && matchConfidence * 100 >= XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT
+      && matchConfidence * 100 <= XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT;
+    const input = xmlCiiEmpiricalWeightValidationInput({
+      branchName: nr.branchName, toNode: nr.nodeNumber, componentRefNo: nr.componentRefNo,
+      boreMm: nr.boreMm, rating: nr.rating, massKg: proposed,
+      weightOrigin: 'preview-weight-match',
+    }, {
+      ...nr, candidates: nr.weightCandidates || [], weightMatch: nr.weightMatch,
+      candidate: best,
+    });
+    const evidence = validator.validate(input, {
+      abnormalityThresholdPct: XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT,
+    });
+    if (eligibleConfidence && evidence.status !== 'UNVALIDATED' && !evidence.reportableAbnormality) {
+      weights.set(`${text(nr.branchName)}|${text(nr.nodeNumber)}`, proposed);
+      continue;
+    }
+    // Both policies must pass: 60–100% suggestion confidence and empirical
+    // A1/A2 deviation within ±50%. No arbitrary length/mass restrictions.
+    reviewProposals.push({
+      key: text(nr.key), branchName: text(nr.branchName),
+      toNode: text(nr.nodeNumber), componentType: text(nr.componentType),
+      componentRefNo: text(nr.componentRefNo), endpoint: text(nr.endpoint),
+      elementLengthMm: nr.lengthMm ?? null, proposedWeightKg: proposed,
+      currentWeightKg: 0, candidate: best,
+      suggestionConfidencePct: matchConfidence === null ? null : matchConfidence * 100,
+      empiricalEvidence: evidence,
+      weightOrigin: 'review-required-preview-proposal',
+      reviewFlags: [
+        ...(!eligibleConfidence ? ['AUTO_SUGGESTION_CONFIDENCE_OUTSIDE_60_TO_100_PERCENT'] : []),
+        ...(evidence.reportableAbnormality ? ['EMPIRICAL_A1_A2_ABNORMAL_GT_50_PERCENT'] : []),
+        ...(evidence.status === 'UNVALIDATED' ? ['EMPIRICAL_VALIDATION_UNAVAILABLE'] : []),
+      ],
+    });
   }
-  return weights;
+  return { weights, reviewProposals };
 }
 
 async function applyStandaloneProcessParity(xmlText, config, stagedJsonText, diagnostics) {
-  const result = { xmlText, branchRows: [], nodeRows: [], expectedEntries: [], appliedFields: 0 };
+  const result = { xmlText, branchRows: [], nodeRows: [], expectedEntries: [], reviewProposals: [], appliedFields: 0 };
   if (typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') {
     throw new Error('DOMParser/XMLSerializer is unavailable for standalone run parity enrichment.');
   }
@@ -95,7 +149,7 @@ async function applyStandaloneProcessParity(xmlText, config, stagedJsonText, dia
   result.nodeRows = Array.isArray(preview?.nodeRows) ? preview.nodeRows : [];
   if (!result.branchRows.length) return result;
 
-  const nodeWeights = mappedNodeWeights(result.nodeRows, config);
+  const { weights: nodeWeights, reviewProposals } = mappedNodeWeights(result.nodeRows, config);
   const byBranch = new Map(result.branchRows.map((row) => [text(row.branchName), row]));
   const document = new DOMParser().parseFromString(xmlText, 'application/xml');
   if (document.getElementsByTagName('parsererror').length) throw new Error('Standalone run parity could not parse the enriched XML.');
@@ -127,7 +181,9 @@ async function applyStandaloneProcessParity(xmlText, config, stagedJsonText, dia
       });
     }
 
-    for (const node of childrenByName(branch, 'Node')) {
+    const branchNodes = childrenByName(branch, 'Node');
+    for (let nodeIndex = 0; nodeIndex < branchNodes.length; nodeIndex += 1) {
+      const node = branchNodes[nodeIndex];
       const nodeNumber = childText(node, 'NodeNumber');
       const nodeWrites = [
         { name: 'PipingClass', field: 'pipingClass', value: row.pipingClass, kind: 'text' },
@@ -149,6 +205,20 @@ async function applyStandaloneProcessParity(xmlText, config, stagedJsonText, dia
 
       const mapped = nodeWeights.get(`${branchName}|${nodeNumber}`);
       const existingWeight = numeric(childText(node, 'Weight'));
+      if (existingWeight === null || existingWeight === 0) {
+        const pending = reviewProposals.find((proposal) =>
+          text(proposal.branchName) === branchName
+          && text(proposal.toNode) === nodeNumber
+          && text(proposal.componentRefNo).replace(/^=/, '') === childText(node, 'ComponentRefNo').replace(/^=/, '')
+          && text(proposal.endpoint) === childText(node, 'Endpoint'));
+        if (pending && nodeIndex > 0) {
+          result.reviewProposals.push({
+            ...pending,
+            fromNode: childText(branchNodes[nodeIndex - 1], 'NodeNumber'),
+            currentWeightKg: 0,
+          });
+        }
+      }
       if (mapped !== undefined && (existingWeight === null || existingWeight === 0) && setChildText(document, node, 'Weight', mapped)) {
         result.appliedFields += 1;
         recordExpected(result.expectedEntries, {
@@ -208,6 +278,7 @@ export async function enrichStandaloneXmlForRun(job, extraOptions = {}) {
     branchRows: [],
     nodeRows: [],
     expectedEntries: [],
+    reviewProposals: [],
   };
   if (!sourceText.trim()) {
     out.error = 'Standalone run parity requires non-empty XML source text.';
@@ -245,6 +316,7 @@ export async function enrichStandaloneXmlForRun(job, extraOptions = {}) {
     out.branchRows = process.branchRows;
     out.nodeRows = process.nodeRows;
     out.expectedEntries = process.expectedEntries;
+    out.reviewProposals = process.reviewProposals;
     out.evidence = createStandaloneRunParityEvidence({
       xmlText: out.xmlText,
       expectedEntries: out.expectedEntries,

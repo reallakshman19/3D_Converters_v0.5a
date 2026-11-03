@@ -1,6 +1,8 @@
 /**
  * Read-only post-enrichment audit of the positive RIGID weights emitted by
  * xml_to_cii2019.py. Never changes an assigned component mass.
+ * Element lengths and component spans are diagnostic measurements only;
+ * empirical A1/A2 ±50% deviation is the sole numeric review gate.
  */
 function text(value) { return value == null ? '' : String(value).trim(); }
 function positive(value) {
@@ -34,7 +36,7 @@ function componentSpan(nodes, ref) {
   const first = source.filter((node) => text(node.endpoint) === '1');
   const second = source.filter((node) => text(node.endpoint) === '2');
   const spans = first.flatMap((a) => second.map((b) => distance(a.position, b.position)))
-    .filter((span) => span !== null && span > 6);
+    .filter((span) => span !== null && span > 0);
   if (!spans.length || spans.some((span) => Math.abs(span - spans[0]) > 0.001)) return null;
   return spans[0];
 }
@@ -47,6 +49,7 @@ function sourceRows(xmlText) {
     nodes: [...(branch.childNodes || [])].filter((node) => node.nodeType === 1 && localName(node) === 'Node').map((node) => ({
       nodeNumber: childText(node, 'NodeNumber'),
       componentType: childText(node, 'ComponentType'),
+      nodeName: childText(node, 'NodeName'),
       componentRefNo: childText(node, 'ComponentRefNo'),
       endpoint: childText(node, 'Endpoint'),
       rigid: childText(node, 'Rigid'),
@@ -64,7 +67,7 @@ function propagatedSource(row, propagationRows) {
     && reference(item.componentRefNo) === row.componentRefNo
     && text(item.endpoint) === row.endpoint);
 }
-function auditBranch(branch, propagationRows, ratioThreshold) {
+function auditBranch(branch, propagationRows) {
   const results = [];
   const nodes = Array.isArray(branch.nodes) ? branch.nodes : [];
   for (let index = 1; index < nodes.length; index += 1) {
@@ -78,7 +81,7 @@ function auditBranch(branch, propagationRows, ratioThreshold) {
     const lengthRatio = wholeComponentSpanMm && elementLengthMm !== null ? elementLengthMm / wholeComponentSpanMm : null;
     const row = {
       branchName: text(branch.branchName), fromNode: text(from.nodeNumber), toNode: text(to.nodeNumber),
-      endpoint: text(to.endpoint), componentType: text(to.componentType),
+      endpoint: text(to.endpoint), componentType: text(to.componentType), nodeName: text(to.nodeName),
       componentRefNo, boreMm: positive(to.boreMm), rating: text(to.rating),
       massKg, elementLengthMm, wholeComponentSpanMm, lengthRatio,
       weightOrigin: 'existing-enriched-weight', reviewFlags: [],
@@ -86,9 +89,6 @@ function auditBranch(branch, propagationRows, ratioThreshold) {
     if (propagatedSource(row, propagationRows)) {
       row.weightOrigin = 'post-review-split-propagation';
       row.reviewFlags.push('POST_REVIEW_WEIGHT_PROPAGATION');
-    }
-    if (lengthRatio !== null && lengthRatio < ratioThreshold) {
-      row.reviewFlags.push('FULL_COMPONENT_WEIGHT_ON_SHORT_RIGID_ELEMENT');
     }
     if (!componentRefNo) row.reviewFlags.push('WEIGHT_COMPONENT_REFERENCE_UNKNOWN');
     results.push(row);
@@ -108,9 +108,8 @@ function auditBranch(branch, propagationRows, ratioThreshold) {
 }
 export function auditXmlCiiRigidWeightsFromBranches(branches, options = {}) {
   const propagated = Array.isArray(options.propagationRows) ? options.propagationRows : [];
-  const ratioThreshold = Number.isFinite(options.ratioThreshold) ? options.ratioThreshold : 0.65;
   const weightScale = options.kgToNewton === false ? 1 : 10;
-  const rows = (Array.isArray(branches) ? branches : []).flatMap((branch) => auditBranch(branch, propagated, ratioThreshold))
+  const rows = (Array.isArray(branches) ? branches : []).flatMap((branch) => auditBranch(branch, propagated))
     .map((row) => ({ ...row, exportedWeight: row.massKg * weightScale, exportedUnit: weightScale === 10 ? 'N' : 'kg', status: row.reviewFlags.length ? 'REVIEW_REQUIRED' : 'AUDITED' }));
   const flagged = rows.filter((row) => row.reviewFlags.length);
   return {

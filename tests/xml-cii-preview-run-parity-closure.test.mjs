@@ -76,7 +76,21 @@ test('workflow fails closed and never calls the engine when parity is unverified
   assert.equal(result.ciiText, null);
 });
 
-test('workflow sends the verified browser-enriched XML to the engine unchanged', async () => {
+test('workflow sends the verified browser-enriched XML to the engine unchanged', async (t) => {
+  const priorDOMParser = globalThis.DOMParser;
+  if (typeof globalThis.DOMParser === 'undefined') {
+    try {
+      const { JSDOM } = await import('jsdom');
+      globalThis.DOMParser = new JSDOM('<!doctype html><html></html>').window.DOMParser;
+    } catch {
+      t.skip('XML parser not available outside browser/CI DOM environment');
+      return;
+    }
+  }
+  t.after(() => {
+    if (priorDOMParser === undefined) delete globalThis.DOMParser;
+    else globalThis.DOMParser = priorDOMParser;
+  });
   const verifiedXml = '<Root><Branch><Branchname>/LINE-A/B1</Branchname></Branch></Root>';
   const digest = digestXmlCiiParityText(verifiedXml);
   let engineCalls = 0;
