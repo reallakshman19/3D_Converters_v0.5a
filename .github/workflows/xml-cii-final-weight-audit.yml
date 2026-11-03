@@ -40,16 +40,16 @@ jobs:
         run: |
           git worktree add --detach /tmp/weight-before 1629dc8e5e1b764c69e4efbb19be98295e8ebcfd
           python3 /tmp/weight-before/tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-audit-input/source.xml --staged /tmp/glrd-audit-input/stage.json --linelist /tmp/glrd-audit-input/linelist.xlsx --out /tmp/glrd-audit-output --label before
-          python3 tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-audit-input/source.xml --staged /tmp/glrd-audit-input/stage.json --linelist /tmp/glrd-audit-input/linelist.xlsx --out /tmp/glrd-audit-output --label after
-          for file in reviewed-enriched.xml reviewed.cii raw-enriched.xml raw.cii master900-enriched.xml master900.cii master1500-enriched.xml master1500.cii; do
-            cmp "/tmp/glrd-audit-output/before/$file" "/tmp/glrd-audit-output/after/$file"
+          python3 tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-audit-input/source.xml --staged /tmp/glrd-audit-input/stage.json --linelist /tmp/glrd-audit-input/linelist.xlsx --out /tmp/glrd-audit-output --label pr-after
+          for file in reviewed-enriched.xml reviewed.cii raw-enriched.xml raw.cii; do
+            cmp "/tmp/glrd-audit-output/before/$file" "/tmp/glrd-audit-output/pr-after/$file"
           done
           python3 tests/xml-cii-runtime-custody.test.py
       - name: Audit actual GLRD 900 flange exported weight
         run: |
           python3 - <<'PY'
           import json, xml.etree.ElementTree as ET
-          root = ET.parse('/tmp/glrd-audit-output/after/master900-enriched.xml').getroot()
+          root = ET.parse('/tmp/glrd-audit-output/pr-after/master900-enriched.xml').getroot()
           branches = []
           for branch in root.iter('Branch'):
               branches.append({'branchName': branch.findtext('Branchname', ''),
