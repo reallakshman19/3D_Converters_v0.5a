@@ -26,7 +26,7 @@ export async function collectModeARigidWeightReviewIssues(state = {}, config = {
           dtxr: issue.dtxr,
         }, config, { includeRejected: true })
       : { candidates: [], rejectedCandidates: [] };
-    return applyXmlCiiFlangeWeightFallbackToIssue({
+    const enriched = applyXmlCiiFlangeWeightFallbackToIssue({
       ...issue,
       rating,
       dtxrRating: authority.dtxrRating,
@@ -36,6 +36,11 @@ export async function collectModeARigidWeightReviewIssues(state = {}, config = {
       candidates: ranking.candidates.slice(0, 5),
       rejectedCandidates: ranking.rejectedCandidates.slice(0, 3),
     }, config);
+    const qualified = qualifiedXmlCiiRigidAutoWeightCandidate(enriched, {
+      masterRows: config?.weight?.masterRows,
+    });
+    return { ...enriched, empiricalAutoWeightEvaluated: true,
+      empiricalAutoWeightKg: qualified?.weightKg ?? null };
   }).filter((issue) => !issue.mapped);
   // Include empirical-deviant *positive* masses in the existing consolidated gate,
   // rather than showing only zero-weight rows. Late parity-generated weights
@@ -92,7 +97,9 @@ function candidateButtons(issue, rowIndex) {
 }
 
 function rowMarkup(issue, rowIndex) {
-  const safe = qualifiedXmlCiiRigidAutoWeightCandidate(issue);
+  const safe = issue.empiricalAutoWeightEvaluated
+    ? (issue.empiricalAutoWeightKg !== null ? { weightKg: issue.empiricalAutoWeightKg } : null)
+    : qualifiedXmlCiiRigidAutoWeightCandidate(issue);
   const info = ratingInfo(issue);
   const badge = info.conflict
     ? '<span title="Rating conflict with DTXR" style="color:#fca5a5;font-weight:700;"> !</span>'
@@ -190,7 +197,9 @@ export function openModeAConsolidatedRigidWeightReviewPopup(entries = []) {
     overlay.querySelector('[data-mode-a-rigid-fill-exact]')?.addEventListener('click', () => {
       let count = 0;
       rows.forEach((row, index) => {
-        const value = qualifiedXmlCiiRigidAutoWeightCandidate(row)?.weightKg;
+        const value = row.empiricalAutoWeightEvaluated
+          ? row.empiricalAutoWeightKg
+          : qualifiedXmlCiiRigidAutoWeightCandidate(row)?.weightKg;
         if (!Number.isFinite(value) || value <= 0) return;
         const input = overlay.querySelectorAll('.mc-rigid-review-input')[index];
         if (input) { input.value = String(value); count += 1; }
