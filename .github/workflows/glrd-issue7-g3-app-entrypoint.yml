@@ -28,7 +28,7 @@ jobs:
           node --check tests/glrd_issue7_g3_app_discovery.mjs
           git diff --name-only ac97022e2b21569367a450eb7591eda695cf8c57 HEAD | while read -r file; do
             case "$file" in
-              tests/glrd_issue7_g3_app_discovery.mjs|.github/workflows/glrd-issue7-g3-app-entrypoint.yml) ;;
+              tests/glrd_issue7_g3_app_discovery.mjs|tests/glrd_issue7_g3_app_run_readiness.mjs|.github/workflows/glrd-issue7-g3-app-entrypoint.yml) ;;
               *) echo "Production or unrelated file changed: $file"; exit 1;;
             esac
           done
@@ -132,6 +132,46 @@ jobs:
             'caveat':'This is actual UI Preview/cache lifecycle only; no user-driven Run or downloaded XML captured, G3 export NOT_PROVEN'}
           (root/'v7-active-ui-cache-reentry-compare.json').write_text(json.dumps(result,indent=2)+'\n')
           print(json.dumps(result,indent=2))
+          PY
+      - name: Inspect real Phase 6 review and Phase 10 Run readiness on immutable PR2 UI
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/glrd/outputs/pr2-readiness
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          node tests/glrd_issue7_g3_app_run_readiness.mjs \
+            --root /tmp/glrd/phase1 --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/outputs/pr2-readiness --label baseline \
+            --expected-sha 814157b162b981c9876f564f3cb0474435c8c37e \
+            --chromium "$CHROME_BIN"
+      - name: Record G3 readiness and outstanding interactive export gates
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('/tmp/glrd/outputs')
+          o=json.loads((root/'pr2-readiness/g3-real-workbench-discovery.json').read_text())
+          assert o['status']=='UI_MASTER_IMPORT_AND_PREVIEW_OBSERVED'
+          obs=o['observation']
+          assert obs['allMasterImportsVerified'] and obs['uiMappedCount']=='30'
+          report={
+            'schema':'glrd-issue7-full-ui-readiness-ledger-v1',
+            'status':'PARTIAL_G3_ONLY',
+            'inputBasis':'original GLRD XML, staged JSON, actual Linelist worksheet 112 rows, original material map, transported class/weight CSV',
+            'sourceCommit':o['sourceSha'],
+            'preview':{'mapped':obs['uiMappedCount'],'unmapped':obs['uiUnmappedCount'],'cache':obs.get('previewCacheInitial')},
+            'review':obs.get('weightReview',{}),
+            'runPanel':obs.get('outputPanel',{}),
+            'downloadedEnrichedXml':'NOT_PROVEN',
+            'exactUiXmlByteParity':'NOT_PROVEN',
+            'rationale':'This test opens UI phases but does not invoke Run, approve review, or capture a downloaded XML file'
+          }
+          (root/'g3-readiness-ledger.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
           PY
       - name: Preserve real app observations and blockers
         if: always()
