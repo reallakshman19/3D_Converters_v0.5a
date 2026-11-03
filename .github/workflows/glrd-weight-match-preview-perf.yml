@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Load real GLRD files and unchanged weight master
         run: |
           set -euo pipefail
@@ -42,6 +44,42 @@ jobs:
           (p/'weight-config.json').write_text(json.dumps(config))
           PY
           node tests/glrd_weight_match_preview_profile.mjs --source /tmp/glrd-preview/inputs/source.xml --staged /tmp/glrd-preview/inputs/stage.json --master /tmp/glrd-preview/inputs/weight-master.json --config /tmp/glrd-preview/inputs/weight-config.json --out /tmp/glrd-preview/results --label baseline
+      - name: Prove legacy RIGID split duplication and verify corrected owner custody against GLRD XML
+        run: |
+          set -euo pipefail
+          git show d718409659e71c7fa4fd6c5222b2a3d364682878^:converters/xml-cii2019-core/split-rigid-weight-propagation.js > /tmp/glrd-preview/results/legacy-split-rigid-weight-propagation.mjs
+          node tests/xml-cii-rigid-split-mass-custody.test.mjs \\
+            --enriched /tmp/glrd-preview/results/GLRD-enriched.xml \\
+            --old-module /tmp/glrd-preview/results/legacy-split-rigid-weight-propagation.mjs \\
+            --out /tmp/glrd-preview/results
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('/tmp/glrd-preview/results')
+          report=json.loads((p/'GLRD-weight-split-before-after-diff.json').read_text())
+          lines=['GLRD CONTROLLED SPLIT WEIGHT DIFF',
+            report['warning'],
+            'Owner: '+repr(report['owner']),
+            'Before: legacy full-weight sibling propagation',
+            'After: owner-only mass preserved',
+            'Changed receiving node weights:']
+          for row in report['changedRows']:
+            lines.append(f"  Node {row['nodeNumber']}: BEFORE {row['beforeWeightKg']} kg -> AFTER {row['afterWeightKg']} kg")
+          lines.extend(['legacy SHA256: '+str(report['legacyPreFixSha256']),
+             'fixed SHA256: '+str(report['correctedAfterSplitSha256'])])
+          (p/'GLRD-weight-split-diff.txt').write_text('\\n'.join(lines)+'\\n')
+          print('\\n'.join(lines))
+          assert report['changedRows'], 'legacy vs corrected XML must differ'
+          assert report['correctedAppliedCount']==0
+          PY
+      - name: Weight Match and RIGID regression suite
+        run: |
+          set -euo pipefail
+          node --check converters/xml-cii2019-core/split-rigid-weight-propagation.js
+          node --check tabs/model-converters/converters/xmltocii2019_runner.js
+          node tests/xml-cii-final-weight-audit.test.mjs
+          node tests/xml-cii-output-empirical-review.test.mjs
+          python3 tests/xml-cii-runtime-custody.test.py
       - name: Upload raw baseline enriched XML, CII and Weight Match profile
         if: always()
         uses: actions/upload-artifact@v4
