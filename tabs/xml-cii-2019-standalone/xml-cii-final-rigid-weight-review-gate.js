@@ -82,7 +82,7 @@ export function buildStandaloneFinalRigidReview(parity, config = {}, options = {
   if (!xmlText) throw new Error('Final enriched XML missing: cannot audit rigid weights.');
   const audit = validateXmlCiiFinalRigidWeightAudit(
     auditXmlCiiRigidWeightsForExport(xmlText, { kgToNewton: options.kgToNewton !== false }),
-    collectXmlCiiWeightMatchRows(xmlText, options.stagedJsonText || '', config),
+    [...collectXmlCiiWeightMatchRows(xmlText, options.stagedJsonText || '', config), ...(parity?.nodeRows || [])],
     config?.weight?.masterRows || [],
   );
   const issues = audit.rows.filter(isReviewRequired).map((row) => edgeReviewIssue(row, parity?.nodeRows));
