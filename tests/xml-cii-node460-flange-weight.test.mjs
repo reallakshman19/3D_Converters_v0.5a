@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { xmlCiiPhysicalComponentSpanLengthMm } from '../converters/xml-cii2019-core/weight-match-model.js';
 import { buildXmlCiiFlangeWeightFallback } from '../converters/xml-cii2019-core/flange-weight-fallback.js';
+import { rankXmlCiiWeightCandidates } from '../converters/xml-cii2019-core/weight-valve-hints.js';
 
 function mockNode(values) {
   return { childNodes: Object.entries(values).map(([localName, value]) => ({
@@ -36,6 +37,12 @@ if (process.env.GLRD_WEIGHT_MASTER_PATH) {
   for (const [rating, weight] of [[900, 15], [1500, 14]]) {
     const matched = buildXmlCiiFlangeWeightFallback({ ...base, rating, lengthMm: span }, actual);
     assert.equal(matched?.suggestedWeight, weight, `historical master flange weight for rating ${rating}`);
+    const ranked = rankXmlCiiWeightCandidates({
+      boreMm: 50, rating, lengthMm: span, componentType: 'RIGID',
+      dtxr: 'WELDING NECK FLANGE Sch 40S 900/1500#',
+    }, actual, { includeRejected: true });
+    assert.equal(ranked.best?.suggestedWeight, weight, `ranking must prefer actual flange mass for rating ${rating}`);
+    assert.equal(ranked.best?.preferred, true, 'matching flange should be a qualified exact candidate');
     assert.equal(buildXmlCiiFlangeWeightFallback({ ...base, rating, lengthMm: 608.3 }, actual), null,
       'real master must not extrapolate through an unrelated pipe span');
   }
