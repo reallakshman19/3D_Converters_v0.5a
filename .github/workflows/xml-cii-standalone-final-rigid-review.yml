@@ -1,0 +1,58 @@
+name: XML CII standalone final rigid mass review end-to-end
+on:
+  push:
+    branches:
+      - fix/standalone-unreviewed-rigid-weight-gate-20261103
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-service-review-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test DOM (CI only, no production dependency)
+        run: npm install --no-save --no-package-lock --ignore-scripts jsdom@26
+      - name: Exercise actual standalone API, dialog, engine-runner custody and master confidence policy
+        run: |
+          node tests/xml-cii-standalone-final-rigid-review-e2e.test.mjs
+          node tests/xml-cii-final-weight-audit.test.mjs
+          node tests/xml-cii-mode-a-consolidated-rigid-review.test.mjs
+          node tests/xml-cii-preview-run-parity-closure.test.mjs
+      - name: Check changed modules and original converter regression
+        run: |
+          for file in \
+            tabs/xml-cii-2019-standalone/xml-cii-standalone-run-parity.js \
+            tabs/xml-cii-2019-standalone/xml-cii-final-rigid-weight-review-gate.js \
+            tabs/xml-cii-2019-standalone/xml-cii-workflow-service.js \
+            tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-final-rigid-weight-popup.js \
+            tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-run-workflow.js \
+            tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-run-workflow-atta-default.js; do
+            node --check "$file"
+          done
+          python3 tests/xml-cii-runtime-custody.test.py
+      - name: Verify unchanged GLRD real XML-to-CII baseline with source + staged JSON + XLSX
+        run: |
+          mkdir -p /tmp/final-review-glrd
+          root="https://raw.githubusercontent.com/reallakshman19/3D_Converters/main/Benchmarks/XML-CII-2019/revamped"
+          curl --retry 3 -fsSL "$root/GLRD-1000-PSI-02.xml" -o /tmp/final-review-glrd/source.xml
+          curl --retry 3 -fsSL "$root/STD-00-PX-4338-01001-0001-02.xlsx" -o /tmp/final-review-glrd/linelist.xlsx
+          curl --retry 3 -fsSL "$root/STF_2026Nov03-0839_managed_stage.json" -o /tmp/final-review-glrd/stage.json
+          python3 tests/glrd_xmlcii_external_reference.py --source /tmp/final-review-glrd/source.xml --staged /tmp/final-review-glrd/stage.json --linelist /tmp/final-review-glrd/linelist.xlsx --out /tmp/final-review-glrd --label pr-after
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          d=Path('/tmp/final-review-glrd/pr-after')
+          report=json.loads((d/'master900-report.json').read_text())
+          edge=report['node460Edges'][0]
+          assert edge['rawMassKg']==15 and edge['ciiMassForceN']==150
+          assert edge['from']==450 and edge['to']==460
+          print('Real-source GLRD Node 460 remains 15 kg / 150 N, correct original component-span scenario.')
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-final-rigid-review-ci-evidence
+          path: /tmp/final-review-glrd
+          if-no-files-found: warn
