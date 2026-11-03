@@ -15,7 +15,7 @@ function parseSupportConfig(raw) {
   }
 }
 
-function applyEffectiveFactsToJob(job) {
+export function applyEffectiveFactsToJob(job) {
   const config = parseSupportConfig(job.supportConfigJson);
   const weightOverrides = job.weightOverrides && typeof job.weightOverrides === 'object' ? job.weightOverrides : {};
   if (Object.keys(weightOverrides).length) {
