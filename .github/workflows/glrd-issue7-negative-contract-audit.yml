@@ -25,7 +25,7 @@ jobs:
           git merge-base --is-ancestor 24917f2855d23473293797edf510872990a9d18c HEAD
           git diff --name-only 24917f2855d23473293797edf510872990a9d18c HEAD
           DIFF="$(git diff --name-only 24917f2855d23473293797edf510872990a9d18c HEAD)"
-          if echo "$DIFF" | grep -E -v '^tests/glrd_issue7_negative_contract_audit\.test\.mjs$|^\.github/workflows/glrd-issue7-negative-contract-audit\.yml$'; then
+          if echo "$DIFF" | grep -E -v '^tests/glrd_issue7_negative_contract_audit\.test\.mjs$|^tests/glrd_issue7_browser_stage_writes\.mjs$|^\.github/workflows/glrd-issue7-negative-contract-audit\.yml$|^\.github/workflows/glrd-issue7-browser-stage-writes\.yml$'; then
             echo "Unexpected production change in audit branch"
             exit 1
           fi
