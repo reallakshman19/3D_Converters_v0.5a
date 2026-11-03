@@ -3,6 +3,8 @@ import { runXmlCii2019StandaloneEngineJob } from './xml-cii-workflow-engine-clie
 import { createWorkflowDiagnostics, normalizeWorkflowResult } from './xml-cii-workflow-types.js';
 import { applyStandaloneSifFacts } from './xml-cii-standalone-sif-apply.js';
 import { enrichStandaloneXmlForRun } from './xml-cii-standalone-run-parity.js';
+import { enforceStandaloneFinalRigidWeightReview } from './xml-cii-final-rigid-weight-review-gate.js';
+import { digestXmlCiiParityText } from './xml-cii-run-parity-evidence.js';
 
 function parseSupportConfig(raw) {
   try {
@@ -118,7 +120,21 @@ export async function runXmlCii2019WorkflowService(job, runtime = {}) {
     return blockedRunParityResult(factedJob, parity);
   }
 
-  const engineJob = { ...factedJob, sourceText: parity.xmlText };
+  // Final physical node weights must be reviewed on the exact enriched XML
+  // handed to Python. The Model Converters runner is NOT on this execution path.
+  let finalReview;
+  try {
+    finalReview = await enforceStandaloneFinalRigidWeightReview(parity, factedJob, runtime);
+  } catch (error) {
+    return blockedRunParityResult(factedJob, {
+      ...parity,
+      error: `Final rigid weight audit failed closed: ${error?.message || String(error)}`,
+    });
+  }
+  if (!finalReview.ok) {
+    return blockedRunParityResult(factedJob, { ...parity, error: finalReview.error });
+  }
+  const engineJob = { ...factedJob, sourceText: finalReview.xmlText };
   const result = await runXmlCii2019StandaloneEngineJob(engineJob, runtime);
   if (Array.isArray(result?.logs) && parity.logs.length) result.logs = [...parity.logs, ...result.logs];
   const normalized = normalizeXmlEngineResult(result);
@@ -126,7 +142,13 @@ export async function runXmlCii2019WorkflowService(job, runtime = {}) {
     normalized.diagnostics.runParityStats = parity.stats;
     normalized.diagnostics.runParityEvidence = parity.evidence;
     normalized.diagnostics.converterInputReleased = true;
-    normalized.diagnostics.converterInputDigest = parity.evidence.engineInputDigest;
+    normalized.diagnostics.converterInputDigest = digestXmlCiiParityText(finalReview.xmlText);
+    normalized.diagnostics.finalRigidWeightAudit = finalReview.audit;
+    normalized.diagnostics.finalRigidWeightReview = {
+      reviewedRows: finalReview.reviewedRows,
+      reviewRequiredCount: finalReview.issues.length,
+      status: finalReview.reviewedRows.length ? 'EXPLICITLY_REVIEWED' : 'NOT_REQUIRED',
+    };
   }
   return normalized;
 }
