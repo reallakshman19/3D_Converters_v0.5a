@@ -52,6 +52,7 @@ export async function inspectOutputEmpiricalSource(sourceState, options = {}) {
   const reviewOptions = {
     stagedJsonText: job.stagedJsonText || '',
     kgToNewton: job.options?.kgToNewton !== false,
+    sourceId: job.sourceId || job.sourceName || '',
   };
   // Inspect the same resolved manual overrides that the export gate will use.
   const overrides = obj(config.overrides?.rigidWeight);
