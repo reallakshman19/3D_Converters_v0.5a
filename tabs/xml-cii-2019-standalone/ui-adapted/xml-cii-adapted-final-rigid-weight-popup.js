@@ -51,21 +51,30 @@ function reviewRow(issue, index, inNewton) {
 
 export function finalRigidWeightReviewMarkup(issues, options = {}) {
   const inNewton = options.kgToNewton !== false;
+  const manual = options.manualInspection === true;
   return `<div class="mc-rigid-review-dialog" role="dialog" aria-modal="true"
     aria-label="Empirical A1 A2 weight deviation review before CII export"
     style="background:#0f172a;color:#e2e8f0;border:1px solid #475569;border-radius:8px;padding:18px;width:96%;max-width:1500px;max-height:90vh;overflow:auto;">
     <header style="display:flex;justify-content:space-between;gap:12px;align-items:center;padding-bottom:12px;border-bottom:1px solid #334155;">
       <div>
-        <h2 style="font-size:18px;font-weight:700;color:#fbbf24;margin:0 0 6px;">Empirical Weight Deviation Review — Final CII Export</h2>
-        <div>${issues.length} rigid weight(s) needing approval in ${esc(options.sourceName || 'current source')}: empirical deviation &gt; ±50%, unavailable A1/A2 evidence, or auto-suggestion confidence outside 60–100%.</div>
+        <h2 style="font-size:18px;font-weight:700;color:#fbbf24;margin:0 0 6px;">${manual ? 'Inspect All RIGID Weights — Output / Run' : 'Empirical Weight Deviation Review — Final CII Export'}</h2>
+        <div>${manual
+          ? `${issues.length} post-enrichment RIGID element(s), including weights within ±50%, in ${esc(options.sourceName || 'current source')}. Select only the rows you want to approve or correct.`
+          : `${issues.length} rigid weight(s) needing approval in ${esc(options.sourceName || 'current source')}: empirical deviation &gt; ±50%, unavailable A1/A2 evidence, or auto-suggestion confidence outside 60–100%.`}</div>
       </div>
-      <button type="button" data-final-rigid-cancel style="padding:8px;background:#334155;color:#fff;border:0;border-radius:5px;">Cancel CII Export</button>
+      <button type="button" data-final-rigid-cancel style="padding:8px;background:#334155;color:#fff;border:0;border-radius:5px;">${manual ? 'Close Inspection' : 'Cancel CII Export'}</button>
     </header>
     <p style="padding:8px 0;color:#fde68a;">Source values are in <strong>kg</strong>. CII output will use <strong>${inNewton ? 'N (kg × 10)' : 'kg (no conversion)'}</strong>.
     The empirical API checks A1 (size-band) and A2 (leave-target-cell-out matrix). Deviation = (observed kg − estimated kg) / estimated kg × 100.
     <strong>Empirical review threshold: ±50% (strictly greater than 50% deviation).</strong> Either available approach exceeding it triggers review. If neither approach is available, review is required.
     <strong>Separate suggestion auto-apply range: 60–100% match confidence</strong> and within empirical ±50%; other suggestions cannot be assigned without manual approval.
-    Enter or correct each mass, then check its explicit approval box. Cancel blocks conversion; no silent skip.</p>
+    ${manual
+      ? 'This is an optional inspection, not a conversion. Only checked rows are saved; unchecked rows remain unchanged. Closing does not run Python.'
+      : 'Enter or correct each mass, then check its explicit approval box. Cancel blocks conversion; no silent skip.'}</p>
+    ${manual ? `<label style="display:block;margin:8px 0;">Find edge / node / length / component reference:
+      <input type="search" data-final-rigid-search placeholder="e.g. 939, 10020, 19.1 mm, FLANGE"
+        style="padding:8px;min-width:260px;color:#fff;background:#101827;border:1px solid #64748b;border-radius:5px;">
+      </label>` : ''}
     <div style="overflow:auto;max-height:55vh;">
       <table style="border-collapse:collapse;width:100%;font-size:12px;">
         <thead><tr style="position:sticky;top:0;background:#1e293b;">
@@ -76,8 +85,8 @@ export function finalRigidWeightReviewMarkup(issues, options = {}) {
     </div>
     <p data-final-rigid-status role="status" style="min-height:18px;color:#fca5a5;"></p>
     <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;">
-      <button type="button" data-final-rigid-cancel-secondary style="background:#334155;color:#fff;border:0;border-radius:5px;padding:10px 14px;">Cancel</button>
-      <button type="button" data-final-rigid-confirm style="background:#1d4ed8;color:#fff;border:0;border-radius:5px;padding:10px 14px;font-weight:700;">Apply Reviewed Weights and Continue</button>
+      <button type="button" data-final-rigid-cancel-secondary style="background:#334155;color:#fff;border:0;border-radius:5px;padding:10px 14px;">${manual ? 'Close / No Changes' : 'Cancel'}</button>
+      <button type="button" data-final-rigid-confirm style="background:#1d4ed8;color:#fff;border:0;border-radius:5px;padding:10px 14px;font-weight:700;">${manual ? 'Save Selected Reviewed Weights' : 'Apply Reviewed Weights and Continue'}</button>
     </div>
   </div>`;
 }
@@ -100,6 +109,13 @@ export function openStandaloneFinalRigidWeightReviewPopup(issues = [], options =
     const cancel = () => finish({ cancelled: true, weightsByKey: {}, approvedKeys: [] });
     overlay.querySelector('[data-final-rigid-cancel]')?.addEventListener('click', cancel);
     overlay.querySelector('[data-final-rigid-cancel-secondary]')?.addEventListener('click', cancel);
+    const search = overlay.querySelector('[data-final-rigid-search]');
+    search?.addEventListener('input', () => {
+      const query = String(search.value || '').trim().toLowerCase();
+      overlay.querySelectorAll('[data-final-rigid-review-row]').forEach((row) => {
+        row.style.display = !query || row.textContent.toLowerCase().includes(query) ? '' : 'none';
+      });
+    });
     overlay.querySelector('[data-final-rigid-confirm]')?.addEventListener('click', () => {
       const weightsByKey = {};
       const approvedKeys = [];
@@ -108,6 +124,7 @@ export function openStandaloneFinalRigidWeightReviewPopup(issues = [], options =
         const input = overlay.querySelector(`[data-final-rigid-mass="${index}"]`);
         const approval = overlay.querySelector(`[data-final-rigid-approve="${index}"]`);
         const mass = Number(input?.value);
+        if (options.manualInspection === true && !approval?.checked) continue;
         if (!approval?.checked || !String(input?.value || '').trim() || !Number.isFinite(mass) || mass <= 0) {
           missing.push(`${issues[index].fromNode || '?'} → ${issues[index].toNode || '?'}`);
           if (input) input.style.borderColor = '#ef4444';
