@@ -120,7 +120,7 @@ const manualResult=await runOutputEmpiricalReviewFromUi(manualRef,{
   reviewPopup:async(issues,opts)=>{
     manualCalls++;
     assert.equal(opts.manualInspection,true);
-    assert.equal(issues[0].elementLengthMm,19.099999999999994);
+    assert.ok(Math.abs(issues[0].elementLengthMm-19.1)<1e-7);
     assert.equal(issues[0].currentWeightKg,150);
     return {cancelled:false,approvedKeys:[issues[0].key],weightsByKey:{[issues[0].key]:15}};
   },
