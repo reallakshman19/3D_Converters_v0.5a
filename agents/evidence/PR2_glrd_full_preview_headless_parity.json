@@ -1,0 +1,45 @@
+{
+  "status": "PASS",
+  "scope": "FULL production Step4 dryrun.js wrapper on pinned GLRD real XML/staged JSON, full historical 10,699 class rows and 1,595 weight rows, 22 reconstructed matching line-list keys/selected exact workbook values, empty explicit material map; custom DOM adapter not actual browser and no enriched XML export",
+  "sources": {
+    "xmlBlob": "8c60c9e58995172d48a9d1ebfa23569db5659f06",
+    "stagedBlob": "c611f53d6571cae7df51d9ac817a723be493b952",
+    "pipingClassMasterBlob": "af218bf3692acd66c93e190635633e14ccfb30ac",
+    "weightMasterBlob": "f969d32dfea1bf03eb7dc310d9f3becacad5a4d1"
+  },
+  "inputNodes": 1224,
+  "lineListKeys": 22,
+  "pipingClassRows": 10699,
+  "weightRows": 1595,
+  "baseline": {
+    "ms": 17357,
+    "jsonParses": 32,
+    "branchCount": 30,
+    "nodeRows": 269,
+    "evidenceCount": 1279,
+    "rejectedEvidence": 1055,
+    "lineMethods": {
+      "exact": 30
+    },
+    "ratings": 30,
+    "materialCodes": 0,
+    "warnings": null
+  },
+  "optimized": {
+    "ms": 16871,
+    "jsonParses": 3,
+    "branchCount": 30,
+    "nodeRows": 269,
+    "evidenceCount": 1279,
+    "rejectedEvidence": 1055,
+    "lineMethods": {
+      "exact": 30
+    },
+    "ratings": 30,
+    "materialCodes": 0,
+    "warnings": null
+  },
+  "exactSerializedPreviewParity": true,
+  "serializedLength": 1428075,
+  "firstDifferenceAt": -1
+}
