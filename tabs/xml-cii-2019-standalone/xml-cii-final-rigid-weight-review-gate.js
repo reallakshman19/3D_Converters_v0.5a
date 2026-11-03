@@ -92,7 +92,7 @@ export function buildStandaloneFinalRigidReview(parity, config = {}, options = {
   // Manual inspection enumerates every pre-Python RIGID candidate, including
   // zero/missing/invalid owners. Only the positive subset enters A1/A2.
   const selectedRows = options.includeAllPositiveMasses
-    ? (audit.allRows || audit.rows)
+    ? [...audit.rows, ...(audit.allRows || []).filter((row) => row.ownerWeightState !== 'POSITIVE')]
     : audit.rows.filter(isReviewRequired);
   const issues = selectedRows.map((row) => edgeReviewIssue(row, parity?.nodeRows));
   const byKey = new Map(issues.map((issue) => [issue.key, issue]));
