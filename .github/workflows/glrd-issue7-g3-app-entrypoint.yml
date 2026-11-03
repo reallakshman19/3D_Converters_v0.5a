@@ -28,7 +28,7 @@ jobs:
           node --check tests/glrd_issue7_g3_app_discovery.mjs
           git diff --name-only ac97022e2b21569367a450eb7591eda695cf8c57 HEAD | while read -r file; do
             case "$file" in
-              tests/glrd_issue7_g3_app_discovery.mjs|tests/glrd_issue7_g3_app_run_readiness.mjs|.github/workflows/glrd-issue7-g3-app-entrypoint.yml) ;;
+              tests/glrd_issue7_g3_app_discovery.mjs|tests/glrd_issue7_g3_app_run_readiness.mjs|tests/glrd_issue7_g3_app_run_attempt.mjs|.github/workflows/glrd-issue7-g3-app-entrypoint.yml) ;;
               *) echo "Production or unrelated file changed: $file"; exit 1;;
             esac
           done
@@ -172,6 +172,47 @@ jobs:
           }
           (root/'g3-readiness-ledger.json').write_text(json.dumps(report,indent=2)+'\n')
           print(json.dumps(report,indent=2))
+          PY
+      - name: Attempt actual Mode A Run and Chrome Enriched XML download; never auto-approve review
+        id: g3_run_attempt
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/glrd/outputs/pr2-run-attempt
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          node tests/glrd_issue7_g3_app_run_attempt.mjs \
+            --root /tmp/glrd/phase1 --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/outputs/pr2-run-attempt --label baseline \
+            --expected-sha 814157b162b981c9876f564f3cb0474435c8c37e \
+            --chromium "$CHROME_BIN"
+      - name: Record Run attempt status without recasting missing export as PASS
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('/tmp/glrd/outputs')
+          p=root/'pr2-run-attempt/g3-real-workbench-discovery.json'
+          if not p.exists():
+              out={'schema':'glrd-g3-download-gate-v1','status':'NOT_PROVEN','blocker':'G3 UI Run script did not produce a report'}
+          else:
+              obj=json.loads(p.read_text())
+              obs=obj.get('observation') or {}
+              run=obs.get('runAttempt') or {}
+              files=obs.get('downloadedFiles') or []
+              delivered=[file for file in files if file.get('looksXml') and file.get('bytes',0)>1000]
+              out={'schema':'glrd-g3-download-gate-v1',
+                'status':'PASS_UI_DOWNLOAD_CAPTURED' if obj['status']=='G3_UI_XML_DOWNLOAD_CAPTURED' and delivered else 'NOT_PROVEN',
+                'sourceCommit':obj.get('sourceSha'),'browserRun':run,'physicallyDownloadedXml':delivered,
+                'reviewWasAutoApproved':False,
+                'scope':'real UI input/import/review/Run click and physical download in Chrome; byte parity with second revision remains separate'}
+          (root/'g3-actual-run-download-gate.json').write_text(json.dumps(out,indent=2)+'\n')
+          print(json.dumps(out,indent=2))
           PY
       - name: Preserve real app observations and blockers
         if: always()
