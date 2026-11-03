@@ -8,6 +8,9 @@ import {
 import {
   qualifiedXmlCiiRigidAutoWeightCandidate,
   collectXmlCiiAutoRigidWeightsFromIssues,
+  xmlCiiWeightSuggestionConfidence,
+  XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT,
+  XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT,
 } from '../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
 import {
   createEmpiricalWeightValidator,
@@ -15,6 +18,12 @@ import {
 } from '../converters/empirical-weight/empirical-weight-validation.js';
 
 assert.equal(XML_CII_EMPIRICAL_REVIEW_THRESHOLD_PCT, 50);
+assert.equal(XML_CII_AUTO_APPLY_MIN_CONFIDENCE_PCT, 60);
+assert.equal(XML_CII_AUTO_APPLY_MAX_CONFIDENCE_PCT, 100);
+assert.equal(xmlCiiWeightSuggestionConfidence({score:60}),0.60);
+assert.equal(xmlCiiWeightSuggestionConfidence({score:0.599}),0.599);
+assert.equal(xmlCiiWeightSuggestionConfidence({score:100}),1);
+assert.equal(xmlCiiWeightSuggestionConfidence({score:101}),null);
 // The API defines strict >±50% deviation from the ESTIMATE, not from the
 // observed mass; exact endpoints are within threshold.
 for (const [observed, abnormal] of [[5,false],[15,false],[4.99,true],[15.01,true]]) {
@@ -91,27 +100,35 @@ console.log('REAL A1/A2 empirical evidence:',JSON.stringify({
  a2HighDeviationPct:high.approach2.deviationPct,
 }));
 
-function issue(weightKg,score=0.10,typeDesc='Weldneck Flange') {
+function issue(weightKg,score=0.65,typeDesc='Weldneck Flange') {
   const candidate={weight:weightKg,selectedWeight:weightKg,score,weightMethod:'length-extrapolated',
     typeDesc,rowData:{TypeDesc:typeDesc,NS:2,DN:50,Rating:900,'RF/RTJ KG':15}};
   return {key:'B-939::10020',branchName:'B-939',nodeNumber:'10020',
     boreMm:50,rating:900,componentRefNo:'=FLANGE-1',
     ranking:{best:candidate},candidates:[candidate]};
 }
-assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,0.10))?.weightKg,15,
-  'low match score is not a hard-coded empirical exclusion');
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,0.599)),null,
+  'a 59.9% suggestion cannot be automatically applied even when empirical deviation is acceptable');
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,0.60))?.weightKg,15,
+  '60% is included in automatic weight suggestion range');
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,100))?.weightKg,15,
+  '100% is included in automatic weight suggestion range');
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,101)),null,
+  'confidence above 100% cannot be automatically applied');
+assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,0.65))?.weightKg,15,
+  '65% qualifies independent of physical edge length');
 assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(150,0.99)),null,
   'high score must not override a ±50% empirical failure');
 assert.equal(qualifiedXmlCiiRigidAutoWeightCandidate(issue(15,0.99,'NOT_A_MODEL_FAMILY')),null,
   'unknown empirical family must fail closed');
-const plan=collectXmlCiiAutoRigidWeightsFromIssues([issue(15,0.10),issue(150,0.99)]);
+const plan=collectXmlCiiAutoRigidWeightsFromIssues([issue(15,0.59),issue(15,0.60),issue(150,0.99)]);
 assert.equal(plan.appliedCount,1);assert.equal(plan.weightsByKey['B-939::10020'],15);
-assert.equal(plan.remainingIssues.length,1);
-assert.equal(plan.appliedRows[0].method,'empirically-validated-a1-a2-within-50-percent');
+assert.equal(plan.remainingIssues.length,2);
+assert.equal(plan.appliedRows[0].method,'confidence-60-to-100-and-empirical-a1-a2-within-50-percent');
 
 const modelSource=readFileSync(new URL('../converters/xml-cii2019-core/weight-match-model.js',import.meta.url),'utf8');
 assert.ok(modelSource.includes('(!reviewEndpoint && !isMapped)'));
 const runner=readFileSync(new URL('../tabs/model-converters/converters/xmltocii2019_runner.js',import.meta.url),'utf8');
 assert.ok(runner.includes('validateXmlCiiFinalRigidWeightAudit('));
 assert.ok(runner.includes('_rigid_weight_export_audit.json'));
-console.log('Empirical A1/A2 ±50% final rigid audit and auto-fill contract: PASS');
+console.log('Separate policies: 60–100% confidence auto-apply + empirical A1/A2 ±50% final rigid review: PASS');
