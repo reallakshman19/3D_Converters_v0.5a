@@ -90,6 +90,46 @@ jobs:
             --material-map /tmp/glrd/inputs/material-map.txt \
             --out /tmp/glrd/outputs --label baseline \
             --expected-sha "$GITHUB_SHA" --chromium "$CHROME_BIN"
+      - name: Compare actual PR2 UI Preview/cache lifecycle under identical GLRD imports
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/glrd/outputs/pr2
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          node tests/glrd_issue7_g3_app_discovery.mjs \
+            --root /tmp/glrd/phase1 --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/outputs/pr2 --label baseline \
+            --expected-sha 814157b162b981c9876f564f3cb0474435c8c37e \
+            --chromium "$CHROME_BIN"
+      - name: Publish initial-v7 cache and reentry comparison; block on missing observations
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('/tmp/glrd/outputs')
+          cand=json.loads((root/'g3-real-workbench-discovery.json').read_text())
+          base=json.loads((root/'pr2/g3-real-workbench-discovery.json').read_text())
+          for name,entry in [('PR2',base),('PR10',cand)]:
+              assert entry['status']=='UI_MASTER_IMPORT_AND_PREVIEW_OBSERVED',f'{name} failed real UI import gate'
+              obs=entry['observation']
+              assert obs['allMasterImportsVerified'],f'{name} master rows not verified'
+              assert obs['uiMappedCount']=='30' and obs['uiUnmappedCount']=='0',f'{name} mapping failure'
+              assert obs['previewCacheInitial']['tableRows']==30 and obs['previewCacheReentry']['tableRows']==30
+              assert obs['previewCacheInitial']['digest']==obs['previewCacheReentry']['digest'],f'{name} authority input changed on reentry'
+          fields=lambda obs:{'initial':obs['previewCacheInitial'],'reentry':obs['previewCacheReentry']}
+          result={'schema':'glrd-issue7-active-v7-ui-cache-parity-v1',
+            'status':'OBSERVED','source':'actual index.html, 4 master import UI, original XLSX sheet, phase-4 reentry',
+            'baselineSha':base['sourceSha'],'candidateSha':cand['sourceSha'],
+            'baseline':fields(base['observation']),'candidate':fields(cand['observation']),
+            'expectedInputRows':{'originalXlsxUiLinelistSheet':112,'class':10699,'material':383,'weight':1595},
+            'caveat':'This is actual UI Preview/cache lifecycle only; no user-driven Run or downloaded XML captured, G3 export NOT_PROVEN'}
+          (root/'v7-active-ui-cache-reentry-compare.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(result,indent=2))
+          PY
       - name: Preserve real app observations and blockers
         if: always()
         uses: actions/upload-artifact@v4
