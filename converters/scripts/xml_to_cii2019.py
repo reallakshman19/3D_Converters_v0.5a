@@ -98,6 +98,12 @@ class XmlNode:
     bend_type: int | None
     position: tuple[float, float, float]
     restraint_specs: tuple[RestraintSpec, ...]
+    # Final prepared XML occurrence identity (after staged enrichment).
+    # Defaults retain compatibility with independently constructed test nodes.
+    component_ref_no: str = ""
+    source_branch_ordinal: int = -1
+    source_node_ordinal: int = -1
+    source_weight_raw: str = ""
 
 
 @dataclass(frozen=True)
@@ -510,7 +516,7 @@ def _parse_xml_document(path: Path) -> XmlDocument:
     metadata = _metadata_from_root(root, namespace, root_name)
 
     branches: list[XmlBranch] = []
-    for branch_element in _branch_elements_from_root(root, namespace, root_name):
+    for branch_ordinal, branch_element in enumerate(_branch_elements_from_root(root, namespace, root_name)):
         branch_name = _child_text(branch_element, namespace, "Branchname")
         branch_temperature = _parse_branch_temperature(branch_element, namespace)
         branch_pressure = _parse_branch_pressure(branch_element, namespace)
@@ -521,7 +527,7 @@ def _parse_xml_document(path: Path) -> XmlDocument:
         branch_temperatures = _parse_branch_temperatures(branch_element, namespace)
         branch_pressures = _parse_branch_pressures(branch_element, namespace)
         parsed_nodes: list[XmlNode] = []
-        for node_element in branch_element.findall(_q(namespace, "Node")):
+        for node_ordinal, node_element in enumerate(branch_element.findall(_q(namespace, "Node"))):
             node_number = _parse_optional_int(
                 _child_text(node_element, namespace, "NodeNumber"), "Node/NodeNumber"
             )
@@ -596,6 +602,10 @@ def _parse_xml_document(path: Path) -> XmlDocument:
                     bend_type=bend_type_value,
                     position=_parse_position(position_text),
                     restraint_specs=_parse_restraints(node_element, namespace),
+                    component_ref_no=_child_text(node_element, namespace, "ComponentRefNo"),
+                    source_branch_ordinal=branch_ordinal,
+                    source_node_ordinal=node_ordinal,
+                    source_weight_raw=_child_text(node_element, namespace, "Weight"),
                 )
             )
 

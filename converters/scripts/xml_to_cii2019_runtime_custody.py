@@ -12,12 +12,14 @@ from __future__ import annotations
 
 from collections import Counter
 import math
+import json
 import sys
 
 import xml_to_cii2019 as base
 import xml_to_cii2019_patched as patched
 import xml_to_cii2019_direction as direction
 from xml_to_cii2019_bend_radius_policy import apply_bend_radius_policy, publish_one_point_five_d
+from xml_to_cii2019_rigid_ledger import build_rigid_emission_ledger
 
 
 OPEN_END_COINCIDENT_TOLERANCE_MM = 0.5
@@ -210,12 +212,17 @@ def main() -> None:
         args.weight_scale,
         support_config,
     )
+    # Validate every RIGID auxiliary against the exact CII bytes before
+    # releasing either output. A separate manifest is always emitted.
+    rigid_ledger = build_rigid_emission_ledger(model, cii_text, args.weight_scale, input_xml)
+    rigid_ledger_path = args.output.with_suffix(".rigid_ledger.json")
     args.output.write_text(cii_text, encoding="utf-8")
+    rigid_ledger_path.write_text(json.dumps(rigid_ledger, indent=2), encoding="utf-8")
     if args.diagnostics_out:
         args.diagnostics_out.write_text(base._build_diagnostics_report(model), encoding="utf-8")
     print(
         f"Wrote {args.output} with {len(model.edges)} elements and {len(model.restraints)} restraints. "
-        f"runtime_custody=1; bend_radius_1_5d={_PUBLISH_BEND_RADIUS_1_5D}; "
+        f"rigid_ledger={rigid_ledger_path}; runtime_custody=1; bend_radius_1_5d={_PUBLISH_BEND_RADIUS_1_5D}; "
         f"use_restraint_type_based_on_json={args.use_restraint_type_based_on_json}; "
         f"split_condensed_valve_flange={support_config.get('splitCondensedValveFlange')}"
     )

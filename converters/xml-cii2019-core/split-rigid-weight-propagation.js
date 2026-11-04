@@ -20,18 +20,6 @@ function childText(parent, name) {
   return text(firstChild(parent, name)?.textContent);
 }
 
-function setChildText(document, parent, name, value) {
-  let child = firstChild(parent, name);
-  if (!child) {
-    child = parent?.namespaceURI ? document.createElementNS(parent.namespaceURI, name) : document.createElement(name);
-    parent.appendChild(child);
-  }
-  const before = text(child.textContent);
-  const after = text(value);
-  child.textContent = after;
-  return before !== after;
-}
-
 function numeric(value) {
   const cleaned = text(value).replace(/,/g, '');
   if (!cleaned) return null;
@@ -86,21 +74,20 @@ function uniquePositiveWeights(group) {
   return values;
 }
 
-function shouldReceivePropagatedWeight(item) {
-  const current = Number(item.weight);
-  return !Number.isFinite(current) || Math.abs(current) <= 1e-12;
-}
-
 export function applyXmlCiiSplitRigidWeightPropagation(xmlText, options = {}) {
   const empty = {
     xmlText,
     appliedCount: 0,
     appliedRows: [],
     diagnostics: [],
+    ownershipIssues: [],
+    componentLedger: [],
     stats: {
       splitRigidWeightPropagationGroups: 0,
       splitRigidWeightPropagated: 0,
       splitRigidWeightPropagationSkipped: 0,
+      splitRigidWeightOwnerCandidatesPreserved: 0,
+      splitRigidWeightOwnershipIssues: 0,
     },
   };
   if (!text(xmlText) || typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') return empty;
@@ -113,81 +100,141 @@ export function applyXmlCiiSplitRigidWeightPropagation(xmlText, options = {}) {
     return empty;
   }
 
-  const groups = new Map();
-  for (const node of [...document.getElementsByTagName('Node')]) {
-    const record = nodeRecord(node);
-    if (!record.ref) continue;
-    const key = `${record.branchName}::${record.ref}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(record);
-  }
-
-  const appliedRows = [];
   const diagnostics = [];
+  const ownershipIssues = [];
+  const componentLedger = [];
+  const sourceId = text(options.sourceId || options.sourceFileId);
+  const snapshotDigest = text(options.snapshotDigest);
+  const allocations = options.ownershipAllocations || {};
+  const configuredAllocation = (key) => allocations instanceof Map ? allocations.get(key) : allocations?.[key];
   let candidateGroups = 0;
-  let skipped = 0;
+  let preservedLumpedCandidates = 0;
 
-  for (const group of groups.values()) {
-    if (!isSplitRigidWeightGroup(group)) continue;
-    candidateGroups += 1;
-    const weights = uniquePositiveWeights(group);
-    if (weights.length !== 1) {
-      if (weights.length > 1) {
-        skipped += 1;
+  // Build an occurrence-level census. Two disconnected component occurrences
+  // must not become one group because their Branchname or ComponentRefNo repeats.
+  const branches = [...document.getElementsByTagName('Branch')];
+  for (let branchOrdinal = 0; branchOrdinal < branches.length; branchOrdinal += 1) {
+    const branch = branches[branchOrdinal];
+    const branchName = childText(branch, 'Branchname');
+    const nodes = childrenByName(branch, 'Node');
+    let active = [];
+    const flush = () => {
+      if (active.length < 2 || !isSplitRigidWeightGroup(active)) { active = []; return; }
+      candidateGroups += 1;
+      const group = active;
+      active = [];
+      const ref = group[0].ref;
+      const componentOccurrenceId =
+        'rigid-split:' + encodeURIComponent(sourceId || 'UNSCOPED') +
+        ':branch-' + branchOrdinal + ':node-' + group[0].nodeOrdinal +
+        ':ref-' + encodeURIComponent(ref);
+      const positives = group.filter((item) => item.weight !== null && item.weight > 0);
+      const negatives = group.filter((item) => item.weight !== null && item.weight < 0);
+      const invalids = group.filter((item) => item.weightRaw && item.weight === null);
+      const blanks = group.filter((item) => item.weight === null || item.weight === 0);
+      const masses = uniquePositiveWeights(group);
+      const allocation = configuredAllocation(componentOccurrenceId);
+      const componentMassKg = allocation ? Number(allocation.componentMassKg) : null;
+      const evidence = {
+        sourceId, snapshotDigest, branchName, branchOrdinal,
+        componentOccurrenceId, componentRefNo: group[0].componentRefNo,
+        nodes: group.map((item) => ({
+          nodeOrdinal: item.nodeOrdinal,
+          nodeNumber: item.nodeNumber, endpoint: item.endpoint, rigid: item.rigid,
+          componentType: item.componentType, position: item.position,
+          weightKg: item.weight, weightRaw: item.weightRaw,
+        })),
+        positiveNodes: positives.length, zeroOrMissingNodes: blanks.length,
+        uniquePositiveWeights: masses,
+      };
+      let allocationType = 'UNKNOWN';
+      let reason = '';
+      if (negatives.length || invalids.length) {
+        reason = 'negative-or-invalid-node-weight';
+      } else if (allocation) {
+        allocationType = text(allocation.allocationType);
+        if (!snapshotDigest || text(allocation.snapshotDigest) !== snapshotDigest ||
+            (sourceId && text(allocation.sourceId) !== sourceId)) {
+          reason = 'allocation-snapshot-mismatch';
+        } else if (!Number.isFinite(componentMassKg) || componentMassKg < 0) {
+          reason = 'invalid-authorized-component-mass';
+        } else if (allocationType === 'COMPONENT_LUMPED') {
+          const owner = group.find((item) => item.nodeOrdinal === Number(allocation.ownerNodeOrdinal));
+          const valid = owner && Math.abs(Number(owner.weight) - componentMassKg) <= 1e-8 &&
+            group.every((item) => item === owner || item.weight === 0);
+          if (!valid) reason = 'lumped-mass-owner-or-nonowner-mismatch';
+        } else if (allocationType === 'SEGMENT_DISTRIBUTED') {
+          const children = Array.isArray(allocation.childMassesKg) ? allocation.childMassesKg : [];
+          const allocated = new Map(children.map((child) => [Number(child.nodeOrdinal), Number(child.massKg)]));
+          const sum = [...allocated.values()].reduce((total, mass) => total + mass, 0);
+          const valid = children.length === group.length && allocated.size === group.length &&
+            [...allocated.values()].every((mass) => Number.isFinite(mass) && mass >= 0) &&
+            group.every((item) => allocated.has(item.nodeOrdinal) &&
+              item.weight !== null && Math.abs(item.weight - allocated.get(item.nodeOrdinal)) <= 1e-8) &&
+            Math.abs(sum - componentMassKg) <= 1e-8;
+          if (!valid) reason = 'distributed-mass-not-conserved-or-unauthorized';
+        } else if (allocationType === 'ZERO_NONOWNER') {
+          if (componentMassKg !== 0 || !group.every((item) => item.weight === 0))
+            reason = 'zero-nonowner-has-positive-or-missing-mass';
+        } else {
+          reason = 'unknown-allocation-type';
+        }
+      } else if (positives.length > 1) {
+        reason = 'multiple-positive-sibling-weights';
+      } else if (positives.length === 1) {
+        preservedLumpedCandidates += 1;
+      }
+      const status = reason ? 'BLOCKED' :
+        allocation ? 'VALIDATED' : positives.length ? 'OWNERSHIP_UNVERIFIED' : 'NO_POSITIVE_MASS';
+      const record = { ...evidence, allocationType, status,
+        authorizedComponentMassKg: allocation ? componentMassKg : null,
+        reason: reason || (status === 'OWNERSHIP_UNVERIFIED' ? 'explicit-physical-owner-not-established' : ''),
+      };
+      componentLedger.push(record);
+      if (reason || (options.requireAllocation === true && status === 'OWNERSHIP_UNVERIFIED')) {
+        const issue = {
+          ...record, type: 'split-rigid-weight-ownership-unresolved',
+          reason: reason || 'explicit-physical-owner-not-established',
+          message: 'RIGID split has unresolved physical ownership/allocation. No sibling mass was copied, changed or silently approved.',
+        };
+        ownershipIssues.push(issue);
+        diagnostics.push(issue);
+      } else if (status === 'OWNERSHIP_UNVERIFIED') {
         diagnostics.push({
-          type: 'split-rigid-weight-propagation-skipped',
-          branchName: group[0]?.branchName || '',
-          componentRefNo: group[0]?.componentRefNo || '',
-          reason: 'ambiguous-positive-weights',
-          weights,
-          message: 'Split FLAN/RIGID component has multiple positive sibling weights; propagation was skipped to avoid overwriting with an ambiguous value.',
+          ...record, type: 'split-rigid-weight-owner-candidate-preserved',
+          message: 'A sole positive owner candidate was preserved unchanged; explicit ownership is not yet validated.',
         });
       }
-      continue;
+    };
+    for (let nodeOrdinal = 0; nodeOrdinal < nodes.length; nodeOrdinal += 1) {
+      const node = nodes[nodeOrdinal];
+      const record = nodeRecord(node);
+      record.nodeOrdinal = nodeOrdinal;
+      record.weightRaw = childText(node, 'Weight');
+      const isCandidate = record.ref && SPLIT_WEIGHT_COMPONENT_TYPES.has(record.componentType);
+      if (!isCandidate || (active.length && record.ref !== active[0].ref)) flush();
+      if (isCandidate) active.push(record);
     }
-
-    const propagatedWeight = weights[0];
-    for (const item of group) {
-      if (!shouldReceivePropagatedWeight(item)) continue;
-      if (!setChildText(document, item.node, 'Weight', String(propagatedWeight))) continue;
-      const row = {
-        type: 'split-rigid-weight-propagated',
-        branchName: item.branchName,
-        nodeNumber: item.nodeNumber,
-        endpoint: item.endpoint,
-        rigid: item.rigid,
-        componentType: item.componentType,
-        componentRefNo: item.componentRefNo,
-        position: item.position,
-        weight: propagatedWeight,
-        method: 'same-component-ref-split-sibling',
-        message: `Propagated reviewed split component weight ${propagatedWeight} to zero-weight ${item.componentType || 'node'} ${item.nodeNumber || ''} with ComponentRefNo ${item.componentRefNo || ''}.`,
-      };
-      appliedRows.push(row);
-      diagnostics.push(row);
-    }
+    flush();
   }
 
-  const stats = {
-    splitRigidWeightPropagationGroups: candidateGroups,
-    splitRigidWeightPropagated: appliedRows.length,
-    splitRigidWeightPropagationSkipped: skipped,
-  };
-
-  if (appliedRows.length) {
-    diagnostics.push({
-      type: 'split-rigid-weight-propagation-summary',
-      count: appliedRows.length,
-      groups: candidateGroups,
-      message: 'Reviewed rigid/flange split weights were copied to zero-weight sibling nodes sharing the same ComponentRefNo before final CII conversion.',
-    });
-  }
+  // No mutation is permitted by this compatibility hook. A future authorised
+  // SEGMENT_DISTRIBUTED allocation must be written by the owner-ledger
+  // transaction, not inferred from the presence of a single positive weight.
 
   return {
-    xmlText: new XMLSerializer().serializeToString(document),
-    appliedCount: appliedRows.length,
-    appliedRows,
+    xmlText, // preserve the exact approved XML bytes
+    appliedCount: 0,
+    appliedRows: [],
     diagnostics,
-    stats,
+    ownershipIssues,
+    componentLedger,
+    stats: {
+      splitRigidWeightPropagationGroups: candidateGroups,
+      splitRigidWeightPropagated: 0,
+      splitRigidWeightPropagationSkipped: candidateGroups,
+      splitRigidWeightOwnerCandidatesPreserved: preservedLumpedCandidates,
+      splitRigidWeightOwnershipIssues: ownershipIssues.length,
+    },
   };
 }

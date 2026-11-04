@@ -100,6 +100,7 @@ export async function buildXmlCiiWorkflowJobFromUiState(state) {
     sourceKind: state.sourceKind || 'auto',
     sourceText: branchScope.filteredSourceText,
     sourceName: sourceNameFromState(state),
+    sourceId: state.modeASourceId || state.sourceBatch?.activeSourceId || sourceNameFromState(state),
     stagedJsonText: branchScope.filteredStagedJsonText,
     elementSideLoadText: state.elementSideLoadText || null,
     supportConfigJson: enrichSupportConfigJson(state, branchScope),

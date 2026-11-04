@@ -5,6 +5,7 @@ import { applyStandaloneSifFacts } from './xml-cii-standalone-sif-apply.js';
 import { enrichStandaloneXmlForRun } from './xml-cii-standalone-run-parity.js';
 import { enforceStandaloneFinalRigidWeightReview } from './xml-cii-final-rigid-weight-review-gate.js';
 import { digestXmlCiiParityText } from './xml-cii-run-parity-evidence.js';
+import { reconcileFinalPythonRigidWeights } from '../../converters/xml-cii2019-core/rigid-weight-post-python-reconcile.js';
 
 function parseSupportConfig(raw) {
   try {
@@ -134,16 +135,53 @@ export async function runXmlCii2019WorkflowService(job, runtime = {}) {
   if (!finalReview.ok) {
     return blockedRunParityResult(factedJob, { ...parity, error: finalReview.error });
   }
+  // CII must use the exact XML that passed weight ownership inspection.
+  // TopoFix is a separate derived XML; it cannot inherit an approval on
+  // different geometry or component occurrence identity.
+  if (factedJob.options?.useTopoFixForCii === true) {
+    return blockedRunParityResult(factedJob, {
+      ...parity,
+      error: 'RIGID custody blocked: TopoFix changes the Python input after weight review. Review the committed TopoFix XML as a new source before CII export.',
+    });
+  }
   const engineJob = { ...factedJob, sourceText: finalReview.xmlText };
   const result = await runXmlCii2019StandaloneEngineJob(engineJob, runtime);
   if (Array.isArray(result?.logs) && parity.logs.length) result.logs = [...parity.logs, ...result.logs];
   const normalized = normalizeXmlEngineResult(result);
+  const ciiRequired = ['cii-only', 'both'].includes(factedJob.options?.outputMode);
+  if (normalized.ok && ciiRequired && !normalized.ciiText) {
+    return blockedRunParityResult(factedJob, {
+      ...parity,
+      error: 'Post-Python RIGID custody blocked: CII export was requested, but the engine returned no CII to reconcile.',
+    });
+  }
+  if (normalized.ok && normalized.ciiText) {
+    try {
+      const verification = await reconcileFinalPythonRigidWeights({
+        reviewedXmlText: finalReview.xmlText,
+        ciiText: normalized.ciiText,
+        rigidLedger: normalized.rigidLedger,
+        kgToNewton: factedJob.options?.kgToNewton !== false,
+        componentLedger: finalReview.splitCustody?.componentLedger || [],
+      });
+      normalized.diagnostics.rigidPythonOwnershipReconciliation = verification;
+    } catch (error) {
+      return blockedRunParityResult(factedJob, {
+        ...parity,
+        error: 'Post-Python RIGID mass ownership reconciliation failed closed: ' +
+          (error?.message || String(error)),
+      });
+    }
+  }
   if (normalized.diagnostics) {
     normalized.diagnostics.runParityStats = parity.stats;
     normalized.diagnostics.runParityEvidence = parity.evidence;
     normalized.diagnostics.converterInputReleased = true;
     normalized.diagnostics.converterInputDigest = digestXmlCiiParityText(finalReview.xmlText);
     normalized.diagnostics.finalRigidWeightAudit = finalReview.audit;
+    normalized.diagnostics.splitRigidOwnershipLedger = finalReview.splitCustody?.componentLedger || [];
+    normalized.diagnostics.rigidOwnershipSnapshotDigest = finalReview.snapshotDigest;
+    normalized.diagnostics.splitRigidOwnershipIssues = finalReview.splitCustody?.ownershipIssues || [];
     normalized.diagnostics.finalRigidWeightReview = {
       reviewedRows: finalReview.reviewedRows,
       reviewRequiredCount: finalReview.issues.length,

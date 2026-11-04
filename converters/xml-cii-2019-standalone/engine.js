@@ -10,6 +10,7 @@ const SCRIPT_FILE_NAMES = Object.freeze([
   'xml_to_cii2019_direction.py',
   'xml_to_cii2019_bend_radius_policy.py',
   'xml_to_cii2019_runtime_custody.py',
+  'xml_to_cii2019_rigid_ledger.py',
   'xml_to_cii2019_master_addon.py',
   'master_customization.py',
   'cii2019_section_rules.py',
@@ -140,7 +141,17 @@ async function runEnrichedXml(pyodide, job, paths, jobDir, stdout) {
 async function runCii(pyodide, job, paths, jobDir, stdout, stderr) {
   const invocation = buildStandaloneCiiInvocation(job, paths, jobDir);
   await runPythonScript(pyodide, invocation.scriptPath, invocation.argv, stdout, stderr);
-  return { ciiText: pyodide.FS.readFile(invocation.outputPath, { encoding: 'utf8' }), ciiName: invocation.outputName, argv: invocation.argv.slice(1) };
+  const ciiText = pyodide.FS.readFile(invocation.outputPath, { encoding: 'utf8' });
+  const manifestPath = invocation.outputPath.replace(/\\.[^.]+$/, '.rigid_ledger.json');
+  const rigidLedgerText = job.sourceKind === 'inputxml' ? '' :
+    pyodide.FS.readFile(manifestPath, { encoding: 'utf8' });
+  const rigidLedger = rigidLedgerText ? JSON.parse(rigidLedgerText) : null;
+  if (job.sourceKind !== 'inputxml' && rigidLedger?.authority !== 'ACTUAL_PYTHON_MODEL_AND_EMITTED_CII') {
+    throw new Error('Python RIGID export ledger is missing or unverified.');
+  }
+  return { ciiText, ciiName: invocation.outputName, argv: invocation.argv.slice(1),
+    rigidLedger, rigidLedgerText,
+    rigidLedgerName: rigidLedger ? invocation.outputName.replace(/\\.[^.]+$/, '.rigid_ledger.json') : '' };
 }
 
 export async function runXmlCii2019StandaloneEngine(job) {
@@ -164,6 +175,9 @@ export async function runXmlCii2019StandaloneEngine(job) {
     let enrichedName = '';
     let ciiText = null;
     let ciiName = null;
+    let rigidLedger = null;
+    let rigidLedgerText = '';
+    let rigidLedgerName = '';
     const postprocess = [];
 
     let topology = emptyTopologyResult();
@@ -196,6 +210,9 @@ export async function runXmlCii2019StandaloneEngine(job) {
       const cii = await runCii(pyodide, normalizedJob, ciiPaths, jobDir, stdout, stderr);
       ciiText = cii.ciiText;
       ciiName = cii.ciiName;
+      rigidLedger = cii.rigidLedger;
+      rigidLedgerText = cii.rigidLedgerText;
+      rigidLedgerName = cii.rigidLedgerName;
       postprocess.push({ branch: `${sourceKind}-cii`, outputName: ciiName, argv: cii.argv, inputSource: topology.ciiInputSource || 'original' });
     }
     const warnings = [];
@@ -207,8 +224,12 @@ export async function runXmlCii2019StandaloneEngine(job) {
       enrichedName,
       ciiText,
       ciiName,
+      rigidLedger,
+      rigidLedgerText,
+      rigidLedgerName,
       ...topology,
-      diagnostics: diagnostics(normalizedJob, { postprocess, warnings, topology: topology.topologySummary }),
+      diagnostics: diagnostics(normalizedJob, { postprocess, warnings, topology: topology.topologySummary,
+        rigidLedger: rigidLedger ? { schema: rigidLedger.schema, summary: rigidLedger.summary, ciiSha256: rigidLedger.ciiSha256 } : null }),
       logs: [...logs(stdout), ...logs(stderr).map((line) => `stderr: ${line}`)],
       error: null,
     };

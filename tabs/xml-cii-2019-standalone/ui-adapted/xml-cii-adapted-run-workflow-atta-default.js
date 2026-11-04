@@ -4,6 +4,7 @@ import { buildXmlCiiWorkflowJobFromUiState } from '../xml-cii-workflow-ui-adapte
 import { applyStandaloneOutputRunReadiness, updateWorkflowState, xmlCiiEnrichedConfigFromState, saveMasterContextToLocalStorage } from './xml-cii-adapted-state.js';
 import { qualifiedXmlCiiRigidAutoWeightCandidate } from '../../../converters/xml-cii2019-core/rigid-weight-auto-apply.js';
 import { openStandaloneFinalRigidWeightReviewPopup } from './xml-cii-adapted-final-rigid-weight-popup.js';
+import { openStandaloneRigidSplitOwnershipPopup } from './xml-cii-adapted-split-rigid-ownership-popup.js';
 import {
   resolveStandaloneWeightReviewRating,
   standaloneWeightReviewRatingInfo,
@@ -248,6 +249,19 @@ export async function runWorkflowFromUi(stateRef, render) {
       await buildXmlCiiWorkflowJobFromUiState(stateRef.current),
       {
         reviewFinalRigidWeights: (issues, options) => openStandaloneFinalRigidWeightReviewPopup(issues, options),
+        reviewSplitRigidOwnership: (groups, options) => openStandaloneRigidSplitOwnershipPopup(groups, options),
+        onSplitRigidOwnershipApproved: ({ allocationsById }) => {
+          const config = xmlCiiEnrichedConfigFromState(stateRef.current);
+          config.rigidOwnership = {
+            ...(config.rigidOwnership || {}),
+            allocations: { ...(config.rigidOwnership?.allocations || {}), ...allocationsById },
+          };
+          stateRef.current.supportConfigJson = JSON.stringify(config, null, 2);
+          if (stateRef.current.masterContext) {
+            stateRef.current.masterContext.config = config;
+            saveMasterContextToLocalStorage(stateRef.current.masterContext);
+          }
+        },
         onFinalRigidWeightsApplied: ({ weightsByKey }) => {
           const config = xmlCiiEnrichedConfigFromState(stateRef.current);
           config.overrides = { ...(config.overrides || {}), rigidWeight: { ...(config.overrides?.rigidWeight || {}), ...weightsByKey } };

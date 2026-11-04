@@ -1,0 +1,293 @@
+name: GLRD Weight Match preview performance and enriched XML custody
+on:
+  push:
+    branches:
+      - fix/xml-cii-weightmatch-preview-perf-20261103
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  glrd-weight-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Load real GLRD files and unchanged weight master
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/glrd-preview/inputs /tmp/glrd-preview/results
+          root="https://raw.githubusercontent.com/reallakshman19/3D_Converters/main/Benchmarks/XML-CII-2019/revamped"
+          curl --retry 3 -fsSL "$root/GLRD-1000-PSI-02.xml" -o /tmp/glrd-preview/inputs/source.xml
+          curl --retry 3 -fsSL "$root/STD-00-PX-4338-01001-0001-02.xlsx" -o /tmp/glrd-preview/inputs/linelist.xlsx
+          curl --retry 3 -fsSL "$root/STF_2026Nov03-0839_managed_stage.json" -o /tmp/glrd-preview/inputs/stage.json
+          curl --retry 3 -fsSL "https://raw.githubusercontent.com/reallakshman19/3D_Converters/25db94769994751bb0fb6e6d83a578efd9ac8162/docs/docs/Masters/wtValveweights.json" -o /tmp/glrd-preview/inputs/weight-master.json
+          sha256sum /tmp/glrd-preview/inputs/* | tee /tmp/glrd-preview/results/source-sha256.txt
+      - name: Generate actual pre-fix baseline enriched XML from real inputs
+        run: |
+          set -euo pipefail
+          python3 tests/glrd_xmlcii_external_reference.py --source /tmp/glrd-preview/inputs/source.xml --staged /tmp/glrd-preview/inputs/stage.json --linelist /tmp/glrd-preview/inputs/linelist.xlsx --out /tmp/glrd-preview/results --label real-run
+          cp /tmp/glrd-preview/results/real-run/raw-enriched.xml /tmp/glrd-preview/results/GLRD-enriched.xml
+          cp /tmp/glrd-preview/results/real-run/raw.cii /tmp/glrd-preview/results/GLRD.cii
+          cp /tmp/glrd-preview/results/real-run/raw.rigid_ledger.json /tmp/glrd-preview/results/GLRD.rigid_ledger.json
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          base=Path('/tmp/glrd-preview/results')
+          manifest=json.loads((base/'GLRD.rigid_ledger.json').read_text())
+          assert manifest['schema']=='xml-cii-rigid-python-emission-ledger/v1'
+          assert manifest['ciiSha256']==hashlib.sha256((base/'GLRD.cii').read_bytes()).hexdigest()
+          assert manifest['summary']['rigidAuxCount']==len(manifest['rows'])
+          assert any(row['weightState']=='ZERO' for row in manifest['rows'])
+          assert all(row['rigidAuxIndex']==i for i,row in enumerate(manifest['rows'],1))
+          print('GLRD_ALL_ACTUAL_PYTHON_RIGID_AUX_RECONCILED', json.dumps(manifest['summary']))
+          PY
+          sha256sum /tmp/glrd-preview/results/GLRD-enriched.xml /tmp/glrd-preview/results/GLRD.cii
+      - name: Record source identity evidence for reported original 939 to 10020 edge
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, xml.etree.ElementTree as ET
+          from pathlib import Path
+          p=Path('/tmp/glrd-preview')
+          report={'reportedEdge':[939,10020], 'datasets':{}}
+          for label,path in (('unchangedRawSource',p/'inputs/source.xml'),('baselineEnriched',p/'results/GLRD-enriched.xml')):
+              root=ET.parse(path).getroot()
+              tag=lambda el:el.tag.rsplit('}',1)[-1]
+              numbers={939:[],10020:[]}
+              branches=[v for v in root.iter() if tag(v)=='Branch']
+              edgeCount=0
+              for ordinal,b in enumerate(branches):
+                  name=next(((x.text or '').strip() for x in b if tag(x)=='Branchname'),'')
+                  nodes=[v for v in b if tag(v)=='Node']
+                  retained=[]
+                  for nodeOrdinal,node in enumerate(nodes):
+                      val=next(((x.text or '').strip() for x in node if tag(x)=='NodeNumber'),'')
+                      try: number=int(val)
+                      except ValueError: continue
+                      if number in numbers: numbers[number].append({'branchOrdinal':ordinal,'branchName':name,'nodeOrdinal':nodeOrdinal})
+                      if number>0: retained.append(number)
+                  edgeCount+=sum(a==939 and b==10020 for a,b in zip(retained,retained[1:]))
+              report['datasets'][label]={'branchCount':len(branches),'939':numbers[939], '10020':numbers[10020], 'directEdges939to10020':edgeCount}
+          (p/'results/GLRD-original-939-to-10020-identity.json').write_text(json.dumps(report,indent=2)+'\\n')
+          print('GLRD_REPORTED_939_TO_10020_SOURCE_IDENTITY',json.dumps(report))
+          PY
+      - name: Classify existing real GLRD contracted-engine reducer blocker against base branch
+        run: |
+          set -euo pipefail
+          base_sha=52c20ee8c53bcfe278ad33ccdc3f9e4dfb1f6aa3
+          git show "$base_sha:converters/scripts/xml_to_cii2019_contracted_direction.py" > /tmp/glrd-preview/results/base-contracted-direction.py
+          set +e
+          PYTHONPATH=converters/scripts python3 /tmp/glrd-preview/results/base-contracted-direction.py \
+            --input /tmp/glrd-preview/results/GLRD-enriched.xml \
+            --output /tmp/glrd-preview/results/GLRD-base-contracted.cii \
+            --weight-scale 10 --coords-mode first --split-condensed-valve-flange \
+            > /tmp/glrd-preview/results/GLRD-base-contracted.log 2>&1
+          before_rc=$?
+          python3 converters/scripts/xml_to_cii2019_contracted_direction.py \
+            --input /tmp/glrd-preview/results/GLRD-enriched.xml \
+            --output /tmp/glrd-preview/results/GLRD-current-contracted.cii \
+            --weight-scale 10 --coords-mode first --split-condensed-valve-flange \
+            > /tmp/glrd-preview/results/GLRD-current-contracted.log 2>&1
+          after_rc=$?
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('/tmp/glrd-preview/results')
+          old=(p/'GLRD-base-contracted.log').read_text()
+          new=(p/'GLRD-current-contracted.log').read_text()
+          message="REDUCERS auxiliary edge has no PSI116 reducer component owner/AlphaAngle"
+          # An inherited, independently reproduced failure is reported, never
+          # mistaken for RIGID ledger pass or converted into an arbitrary fix.
+          if message not in old or message not in new:
+              print('ORIGINAL_CONTRACTED_ERROR', old[-1500:])
+              print('CURRENT_CONTRACTED_ERROR', new[-1500:])
+              raise AssertionError('Real GLRD contracted engine failure needs investigation; not a confirmed inherited reducer blocker')
+          report='CONTRACTED_ENGINE_GLRD_BASELINE_BLOCKED: base and PR both abort before CII on unchanged REDUCERS owner error. No RIGID ledger or CII is released.\\n'
+          (p/'GLRD-contracted-base-versus-PR-blocker.txt').write_text(report)
+          print(report)
+          PY
+      - name: Weight Match profiling with real GLRD / master
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock --ignore-scripts jsdom@26
+          PYTHONPATH=tests python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from glrd_xmlcii_external_reference import linelist_config
+          p=Path('/tmp/glrd-preview/inputs')
+          config=linelist_config(p/'linelist.xlsx')
+          (p/'weight-config.json').write_text(json.dumps(config))
+          PY
+          node tests/glrd_weight_match_preview_profile.mjs --source /tmp/glrd-preview/inputs/source.xml --staged /tmp/glrd-preview/inputs/stage.json --master /tmp/glrd-preview/inputs/weight-master.json --config /tmp/glrd-preview/inputs/weight-config.json --out /tmp/glrd-preview/results --label baseline
+      - name: Prove legacy RIGID split duplication and verify corrected owner custody against GLRD XML
+        run: |
+          set -euo pipefail
+          git show d718409659e71c7fa4fd6c5222b2a3d364682878^:converters/xml-cii2019-core/split-rigid-weight-propagation.js > /tmp/glrd-preview/results/legacy-split-rigid-weight-propagation.mjs
+          node tests/xml-cii-rigid-split-mass-custody.test.mjs \
+            --enriched /tmp/glrd-preview/results/GLRD-enriched.xml \
+            --old-module /tmp/glrd-preview/results/legacy-split-rigid-weight-propagation.mjs \
+            --out /tmp/glrd-preview/results
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('/tmp/glrd-preview/results')
+          report=json.loads((p/'GLRD-weight-split-before-after-diff.json').read_text())
+          lines=['GLRD CONTROLLED SPLIT WEIGHT DIFF',
+            report['warning'],
+            'Owner: '+repr(report['owner']),
+            'Before: legacy full-weight sibling propagation',
+            'After: owner-only mass preserved',
+            'Changed receiving node weights:']
+          for row in report['changedRows']:
+            lines.append(f"  Node {row['nodeNumber']}: BEFORE {row['beforeWeightKg']} kg -> AFTER {row['afterWeightKg']} kg")
+          lines.extend(['legacy SHA256: '+str(report['legacyPreFixSha256']),
+             'fixed SHA256: '+str(report['correctedAfterSplitSha256'])])
+          (p/'GLRD-weight-split-diff.txt').write_text('\n'.join(lines)+'\n')
+          print('\n'.join(lines))
+          assert report['changedRows'], 'legacy vs corrected XML must differ'
+          assert report['correctedAppliedCount']==0
+          PY
+      - name: Convert both controlled real GLRD split XMLs through actual Python CII and reconcile emitted weight
+        run: |
+          set -euo pipefail
+          python3 converters/scripts/xml_to_cii2019_runtime_custody.py \
+            --input /tmp/glrd-preview/results/GLRD-weight-split-before-enriched.xml \
+            --output /tmp/glrd-preview/results/GLRD-weight-split-before.cii \
+            --weight-scale 10 --coords-mode first --split-condensed-valve-flange
+          python3 converters/scripts/xml_to_cii2019_runtime_custody.py \
+            --input /tmp/glrd-preview/results/GLRD-weight-split-after-enriched.xml \
+            --output /tmp/glrd-preview/results/GLRD-weight-split-after.cii \
+            --weight-scale 10 --coords-mode first --split-condensed-valve-flange
+          python3 - <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+          sys.path.insert(0, 'converters/scripts')
+          import xml_to_cii2019 as base
+          import xml_to_cii2019_patched as patched
+          out=Path('/tmp/glrd-preview/results')
+          def cii_masses(path):
+              data=path.read_text()
+              section=data.split('#$ RIGID\n',1)[1].split('#$ ',1)[0]
+              return [float(line.split()[0]) for line in section.splitlines() if line.split()]
+          pre=out/'GLRD-weight-split-before-enriched.xml'
+          post=out/'GLRD-weight-split-after-enriched.xml'
+          before=out/'GLRD-weight-split-before.cii'
+          after=out/'GLRD-weight-split-after.cii'
+          massBefore=cii_masses(before)
+          massAfter=cii_masses(after)
+          doc=base._parse_xml_document(post)
+          model=patched._build_conversion_model(doc, {}, {}, {})
+          matches=[edge for edge in model.rigid_edges if edge.to_node.node_number==460]
+          assert len(matches)==1 and abs(base._rigid_weight_for_edge(matches[0])-15)<1e-8, 'real GLRD node 460 must emit 15 kg'
+          assert any(abs(value-150)<1e-8 for value in massAfter), 'approved 15 kg must appear as 150 N in actual CII RIGID payload'
+          report={
+            'source':'real GLRD prepared XML, controlled node 460 owner=15 kg',
+            'legacyCiiSha256':hashlib.sha256(before.read_bytes()).hexdigest(),
+            'fixedCiiSha256':hashlib.sha256(after.read_bytes()).hexdigest(),
+            'ciiIdentical':before.read_bytes()==after.read_bytes(),
+            'legacyPositiveRigidMassesN':[v for v in massBefore if v>0],
+            'correctedPositiveRigidMassesN':[v for v in massAfter if v>0],
+            'ownerEdge':{'fromNode':matches[0].from_node.node_number,'toNode':460,'massKg':15,'convertedN':150},
+          }
+          (out/'GLRD-weight-split-Python-CII-reconciliation.json').write_text(json.dumps(report,indent=2)+'\n')
+          print('GLRD_SPLIT_PYTHON_CII',json.dumps(report))
+          PY
+      - name: Model Converters contracted Python RIGID CII emission on surviving synthetic split
+        run: |
+          set -euo pipefail
+          for kind in before after; do
+            python3 converters/scripts/xml_to_cii2019_contracted_direction.py \
+              --input /tmp/glrd-preview/results/SYNTHETIC-surviving-rigid-$kind.xml \
+              --output /tmp/glrd-preview/results/SYNTHETIC-contracted-$kind.cii \
+              --weight-scale 10 --coords-mode first --split-condensed-valve-flange
+            node tests/xml-cii-rigid-contracted-glrd.test.mjs \
+              /tmp/glrd-preview/results "SYNTHETIC-surviving-rigid-$kind.xml" "SYNTHETIC-contracted-$kind"
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('/tmp/glrd-preview/results')
+          before=json.loads((p/'SYNTHETIC-contracted-before.rigid_ledger.json').read_text())
+          after=json.loads((p/'SYNTHETIC-contracted-after.rigid_ledger.json').read_text())
+          assert before['summary']['totalEmittedCiiMass']==300, before['summary']
+          assert after['summary']['totalEmittedCiiMass']==150, after['summary']
+          print('CONTRACTED_PYTHON_RIGID_300_TO_150_N_PASS')
+          PY
+      - name: Prove duplicated CII mass on synthetic surviving 19.1 mm RIGID edge
+        run: |
+          set -euo pipefail
+          python3 converters/scripts/xml_to_cii2019_runtime_custody.py --input /tmp/glrd-preview/results/SYNTHETIC-surviving-rigid-before.xml --output /tmp/glrd-preview/results/SYNTHETIC-surviving-rigid-before.cii --coords-mode first --weight-scale 10
+          python3 converters/scripts/xml_to_cii2019_runtime_custody.py --input /tmp/glrd-preview/results/SYNTHETIC-surviving-rigid-after.xml --output /tmp/glrd-preview/results/SYNTHETIC-surviving-rigid-after.cii --coords-mode first --weight-scale 10
+          python3 - <<'PY'
+          import json, math, sys
+          from pathlib import Path
+          sys.path.insert(0,'converters/scripts')
+          import xml_to_cii2019 as base
+          out=Path('/tmp/glrd-preview/results')
+          report={}
+          for label in ('before','after'):
+            name='SYNTHETIC-surviving-rigid-'+label
+            doc=base._parse_xml_document(out/(name+'.xml'))
+            model=base._build_conversion_model(doc)
+            mass={ (edge.from_node.node_number,edge.to_node.node_number):base._rigid_weight_for_edge(edge) for edge in model.rigid_edges }
+            lines=(out/(name+'.cii')).read_text().split('#$ RIGID\n',1)[1].split('#$ ',1)[0].splitlines()
+            output=[float(line.split()[0]) for line in lines if line.split()]
+            report[label]={'rawEdgesKg':{str(k):v for k,v in mass.items()},'ciiPositiveN':[v for v in output if v>0],'ciiRigidTotalN':sum(output)}
+          assert math.isclose(report['before']['rawEdgesKg']['(930, 939)'],15)
+          assert math.isclose(report['after']['rawEdgesKg']['(930, 939)'],0)
+          assert math.isclose(report['before']['rawEdgesKg']['(939, 10020)'],15)
+          assert math.isclose(report['after']['rawEdgesKg']['(939, 10020)'],15)
+          assert math.isclose(report['before']['ciiRigidTotalN'],300)
+          assert math.isclose(report['after']['ciiRigidTotalN'],150)
+          (out/'SYNTHETIC-rigid-split-CII-diff.json').write_text(json.dumps(report,indent=2)+'\n')
+          print('SYNTHETIC_SPLIT_CII_MASS_REPRO',json.dumps(report))
+          PY
+      - name: Weight Match and RIGID regression suite
+        run: |
+          set -euo pipefail
+          node --check converters/xml-cii2019-core/rigid-weight-snapshot.js
+          node --check tabs/xml-cii-2019-standalone/xml-cii-final-rigid-weight-review-gate.js
+          node --check tabs/xml-cii-2019-standalone/xml-cii-workflow-service.js
+          node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-output-empirical-review.js
+          node --check tabs/xml-cii-2019-standalone/xml-cii-workflow-ui-adapter.js
+          node --check converters/xml-cii2019-core/rigid-weight-export-audit.js
+          node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-final-rigid-weight-popup.js
+          node --check converters/xml-cii-2019-standalone/engine.js
+          node --check tabs/xml-cii-2019-standalone/xml-cii-workflow-types.js
+          node --check tabs/xml-cii-2019-standalone/xml-cii-output-run-readiness.js
+          node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-events.js
+          node tests/xml-cii-rigid-ledger-download.test.mjs
+          node tests/xml-cii-rigid-complete-census.test.mjs
+          node --check converters/xml-cii2019-core/rigid-weight-post-python-reconcile.js
+          node --check tabs/xml-cii-2019-standalone/xml-cii-workflow-service.js
+          node tests/xml-cii-rigid-post-python-reconcile.test.mjs
+          node tests/xml-cii-rigid-approved-component-conservation.test.mjs
+          node tests/xml-cii-rigid-no-cii-bypass.test.mjs
+          node tests/xml-cii-rigid-post-python-glrd.test.mjs --directory /tmp/glrd-preview/results
+          node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-split-rigid-ownership-popup.js
+          node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-run-workflow.js
+          node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-run-workflow-atta-default.js
+          node tests/xml-cii-rigid-split-ownership-approval.test.mjs
+          node tests/xml-cii-rigid-ownership-snapshot.test.mjs
+          node tests/xml-cii-rigid-direct-worker-gate.test.mjs
+          node tests/xml-cii-rigid-model-worker-output-custody.test.mjs
+          node --check converters/xml-cii2019-core/split-rigid-weight-propagation.js
+          node --check tabs/model-converters/converters/xmltocii2019_runner.js
+          node --check converters/py-worker.js
+          node tests/xml-cii-final-weight-audit.test.mjs
+          node tests/xml-cii-output-empirical-review.test.mjs
+          node tests/xml-cii-standalone-final-rigid-review-e2e.test.mjs
+          node tests/xml-cii-mode-a-consolidated-rigid-review.test.mjs
+          node tests/xml-cii-preview-run-parity-closure.test.mjs
+          python3 -m py_compile converters/scripts/xml_to_cii2019.py converters/scripts/xml_to_cii2019_runtime_custody.py converters/scripts/xml_to_cii2019_rigid_ledger.py converters/scripts/xml_to_cii2019_contracted_direction.py
+          python3 tests/xml-cii-rigid-python-emission-ledger.test.py
+          python3 tests/xml-cii-runtime-custody.test.py
+      - name: Upload raw baseline enriched XML, CII and Weight Match profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glrd-weight-match-preview-${{ github.sha }}
+          path: /tmp/glrd-preview/results/
+          if-no-files-found: warn

@@ -19,6 +19,8 @@ import math
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+from xml_to_cii2019_rigid_ledger import build_rigid_emission_ledger
+
 import xml_to_cii2019 as base
 import xml_to_cii2019_direction as direction
 
@@ -720,5 +722,40 @@ def install_short_span_contraction_patch() -> None:
 install_component_topology_patch()
 
 
+def _run_contract_with_rigid_custody() -> None:
+    """Wrap the unchanged CII builder and publish the actual model's ledger.
+
+    The contracted direction engine retains all its topology, bend, SIF, and
+    RIGID logic. This read-only interception validates the emitted CII bytes
+    and records the actual Python edge-to-auxiliary mass correspondence.
+    """
+    original = base._build_cii_text
+    recorded: dict[str, object] = {}
+
+    def build_with_custody(model, coords_mode, version_header_line,
+                           weight_scale=1.0, support_config=None):
+        cii_text = original(model, coords_mode, version_header_line,
+                            weight_scale, support_config)
+        prepared_path = Path(_ACTIVE_TOPOLOGY.source_path) if _ACTIVE_TOPOLOGY.source_path else None
+        recorded["ledger"] = build_rigid_emission_ledger(
+            model, cii_text, float(weight_scale), prepared_path,
+        )
+        return cii_text
+
+    base._build_cii_text = build_with_custody
+    try:
+        direction.main()
+    finally:
+        base._build_cii_text = original
+
+    ledger = recorded.get("ledger")
+    if ledger is None:
+        raise ValueError("RIGID CII export ledger was not generated; release blocked.")
+    output = direction.patched._parse_args().output
+    ledger_path = output.with_suffix(".rigid_ledger.json")
+    ledger_path.write_text(json.dumps(ledger, indent=2), encoding="utf-8")
+    print(f"RIGID_EMISSION_LEDGER {ledger_path} rigidAuxCount={ledger['summary']['rigidAuxCount']}")
+
+
 if __name__ == "__main__":
-    direction.main()
+    _run_contract_with_rigid_custody()

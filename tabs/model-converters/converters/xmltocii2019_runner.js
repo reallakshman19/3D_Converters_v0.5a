@@ -6,6 +6,10 @@ import { applyXmlCiiFlangeWeightFallbackToIssues } from '../../../converters/xml
 import { applyXmlCiiStagedGeometryAuthority } from '../../../converters/xml-cii2019-core/staged-geometry-authority.js?v=20260625-length-auto-weight-1';
 import { applyXmlCiiOutsideDiameterResolver } from '../../../converters/xml-cii2019-core/outside-diameter-resolver.js?v=20260708-od-resolver-1';
 import { applyXmlCiiSplitRigidWeightPropagation } from '../../../converters/xml-cii2019-core/split-rigid-weight-propagation.js?v=20260708-split-weight-1';
+import { digestRigidOwnershipSnapshot } from '../../../converters/xml-cii2019-core/rigid-weight-snapshot.js';
+import { reconcileFinalPythonRigidWeights } from '../../../converters/xml-cii2019-core/rigid-weight-post-python-reconcile.js';
+import { enforceStandaloneRigidSplitOwnership } from '../../xml-cii-2019-standalone/xml-cii-final-rigid-weight-review-gate.js';
+import { openStandaloneRigidSplitOwnershipPopup } from '../../xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-split-rigid-ownership-popup.js';
 import { buildXmlCiiTopologyDisconnectAudit } from '../../../converters/xml-cii2019-core/topology/xml-cii-topology-disconnect-audit.js?v=20260708-topology-1';
 import { buildXmlCiiNodeResolverIndex } from '../../../converters/xml-cii2019-core/sideload-resolver.js';
 import { resolveManualRestraintRows } from '../../../converters/xml-cii2019-core/sideload-restraints.js';
@@ -31,6 +35,92 @@ function publishMatchedPreviewDiagnostics(payload) {
   try { window.localStorage?.setItem(MATCHED_PREVIEW_STORAGE_KEY, JSON.stringify(eventPayload)); } catch {}
   try { window.dispatchEvent(new CustomEvent(MATCHED_PREVIEW_EVENT, { detail: eventPayload })); } catch {}
 }
+/**
+ * Model Converters worker returns an array of files. Never release the CII
+ * until the actual contracted Python RIGID manifest reconciles with the
+ * effective final enriched XML that was submitted to that worker.
+ */
+export async function reconcileModelConvertersPythonRigidResponse(xmlText, response, options = {}) {
+  const outputs = Array.isArray(response?.outputs) ? response.outputs : [];
+  const cii = outputs.filter((item) => /\.cii$/i.test(String(item?.name || '')));
+  const ledgerOutputs = outputs.filter((item) => /\.rigid_ledger\.json$/i.test(String(item?.name || '')));
+  if (cii.length !== 1 || ledgerOutputs.length !== 1
+      || typeof cii[0]?.text !== 'string' || !cii[0].text.trim()
+      || typeof ledgerOutputs[0]?.text !== 'string') {
+    throw new Error('Model Converters CII blocked: exactly one nonempty CII and Python RIGID custody ledger are required.');
+  }
+  let ledger;
+  try { ledger = JSON.parse(ledgerOutputs[0].text); }
+  catch { throw new Error('Model Converters CII blocked: Python RIGID ledger is not valid JSON.'); }
+  const verified = await reconcileFinalPythonRigidWeights({
+    reviewedXmlText: xmlText,
+    ciiText: cii[0].text,
+    rigidLedger: ledger,
+    kgToNewton: options.kgToNewton !== false,
+    componentLedger: options.approvedComponentLedger ?? null,
+  });
+  return { verification: verified, ledger, cii: cii[0] };
+}
+
+/**
+ * Shared mandatory physical split-owner gate for Model Converters.
+ *
+ * Approval is bound to the FINAL bytes sent to Python, not an earlier
+ * partially enriched XML or a CII inference. A successful A1/A2 estimate
+ * is never treated as a physical mass allocation.
+ */
+export async function enforceModelConvertersRigidOwnership({
+  xmlText, sourceText, sourceName, sourceId, stagedJsonText = '',
+  config = {}, options = {}, branchSelection = null,
+} = {}, runtime = {}) {
+  const effectiveSourceId = String(sourceId || sourceName || '');
+  const effectiveName = String(sourceName || '');
+  if (!effectiveSourceId || !xmlText || !sourceText) {
+    throw new Error('Model Converters RIGID ownership requires a named source and final Python XML.');
+  }
+  // Config has its own canonical, allocation-stripped snapshot field. Do
+  // not also hash an unnormalized supportConfigJson string in run options:
+  // merely persisting an approval would invalidate the same exact inputs.
+  const snapshotOptions = { ...(options || {}) };
+  delete snapshotOptions.supportConfigJson;
+  const snapshotDigest = await digestRigidOwnershipSnapshot({
+    sourceId: effectiveSourceId,
+    sourceName: effectiveName,
+    sourceText,
+    stagedJsonText,
+    supportConfigJson: JSON.stringify(config),
+    branchSelection,
+    options: snapshotOptions,
+    preparedXmlText: xmlText,
+  });
+  const popup = runtime.reviewSplitRigidOwnership ||
+    (typeof document !== 'undefined' ? openStandaloneRigidSplitOwnershipPopup : null);
+  const verdict = await enforceStandaloneRigidSplitOwnership(
+    xmlText,
+    { sourceId: effectiveSourceId, sourceName: effectiveName },
+    config,
+    {
+      ...(popup ? { reviewSplitRigidOwnership: (groups, details) => popup(groups, details) } : {}),
+      onSplitRigidOwnershipApproved: runtime.onSplitRigidOwnershipApproved,
+    },
+    snapshotDigest,
+  );
+  if (!verdict.ok) {
+    throw new Error('Model Converters RIGID ownership not approved: ' + verdict.error);
+  }
+  if (Object.keys(verdict.approvedAllocations || {}).length) {
+    config.rigidOwnership = {
+      ...(config.rigidOwnership || {}),
+      allocations: {
+        ...(config.rigidOwnership?.allocations || {}),
+        ...verdict.approvedAllocations,
+      },
+    };
+  }
+  return { snapshotDigest, splitCustody: verdict.splitCustody,
+    approvedAllocations: verdict.approvedAllocations || {} };
+}
+
 function parseSupportConfig(options = {}) { try { const parsed = JSON.parse(options.supportConfigJson || '{}'); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; } }
 function text(value) { return value === undefined || value === null ? '' : String(value).trim(); }
 function mergeRuntimeOverridesIntoConfig(targetConfig, sourceConfig) {
@@ -190,10 +280,35 @@ export async function run(context) {
   const runValues = context.options || {};
   const stem = baseNameWithoutExtension(primary.name);
   if (runValues.createEnrichedXml === false) {
+    // Direct worker mode must satisfy the same engineer-approved split owner
+    // contract as standalone CII; a sole positive node is not approval.
+    const directConfig = parseSupportConfig(runValues);
+    const directOwnership = await enforceModelConvertersRigidOwnership({
+      xmlText: originalXmlText,
+      sourceText: originalXmlText,
+      sourceName: primary.name,
+      sourceId: runValues.sourceId || primary.name,
+      stagedJsonText,
+      config: directConfig,
+      options: runValues,
+      branchSelection: runValues.branchSelection || null,
+    }, {
+      reviewSplitRigidOwnership: runValues.openXmlCiiSplitRigidOwnershipPopup,
+      onSplitRigidOwnershipApproved: runValues.saveXmlCiiRigidOwnershipAllocations,
+    });
     if (!context.workerRunner) throw new Error('Python worker runtime is not available.');
     context.setStatus?.('Starting Python worker...', 'running');
     const serializableOptions = Object.fromEntries(Object.entries(runValues).filter(([, v]) => typeof v !== 'function'));
-    return await withTimeout(context.workerRunner.runJob({ converterId: context.converterId, inputFiles: context.inputFiles, options: serializableOptions }), 'Python worker conversion');
+    const directResponse = await withTimeout(context.workerRunner.runJob({ converterId: context.converterId, inputFiles: context.inputFiles, options: serializableOptions }), 'Python worker conversion');
+    const directVerified = await reconcileModelConvertersPythonRigidResponse(originalXmlText, directResponse,
+      { ...runValues, approvedComponentLedger: directOwnership.splitCustody.componentLedger });
+    return {
+      ...directResponse,
+      logs: { ...(directResponse.logs || {}), stdout: [
+        ...((directResponse.logs?.stdout || [])),
+        'Direct Python RIGID custody verified: ' + directVerified.verification.totalEdges + ' auxiliary edge(s).',
+      ] },
+    };
   }
 
   context.setStatus?.('Enriching XML before CII conversion...', 'running');
@@ -232,15 +347,35 @@ export async function run(context) {
     }
   }
 
-  const splitWeightPropagation = applyXmlCiiSplitRigidWeightPropagation(enriched.xmlText, { config: enriched.config });
+  const rigidOwnershipSnapshotDigest = await digestRigidOwnershipSnapshot({
+    sourceId: runValues.sourceId || primary.name || '',
+    sourceName: primary.name || '',
+    sourceText: originalXmlText,
+    stagedJsonText,
+    supportConfigJson: JSON.stringify(enriched.config || {}),
+    branchSelection: runValues.branchSelection || null,
+    options: runValues,
+    preparedXmlText: enriched.xmlText,
+  });
+  const splitWeightPropagation = applyXmlCiiSplitRigidWeightPropagation(enriched.xmlText, {
+    sourceId: runValues.sourceId || primary.name || '',
+    snapshotDigest: rigidOwnershipSnapshotDigest,
+    ownershipAllocations: enriched.config?.rigidOwnership?.allocations || {},
+    requireAllocation: enriched.config?.rigidOwnership?.requireAllocation === true,
+  });
   enriched.stats = { ...(enriched.stats || {}), ...(splitWeightPropagation.stats || {}) };
+  enriched.splitRigidOwnershipLedger = splitWeightPropagation.componentLedger || [];
+  // Structural observations matter even when no XML weights were rewritten.
+  enriched.diagnostics.push(...(splitWeightPropagation.diagnostics || []));
+  // This early assessment is diagnostic only. An approved allocation may
+  // be supplied or reviewed AFTER the final sideload and XML sanitization.
+  // Only that final, snapshot-bound approval can authorize Python release.
   if (splitWeightPropagation.appliedCount > 0) {
     enriched.xmlText = splitWeightPropagation.xmlText;
     enriched.stats.weightAnnotations = (enriched.stats.weightAnnotations || 0) + splitWeightPropagation.appliedCount;
-    enriched.diagnostics.push(...(splitWeightPropagation.diagnostics || []));
   }
   rigidReviewLogLines.push(`OutsideDiameter resolver: resolved ${outsideDiameter.appliedCount || 0}; unresolved ${outsideDiameter.unresolvedCount || 0}.`);
-  rigidReviewLogLines.push(`Split rigid weight propagation: ${splitWeightPropagation.appliedCount || 0} sibling node(s).`);
+  rigidReviewLogLines.push(`Split rigid mass custody: ${splitWeightPropagation.stats?.splitRigidWeightOwnerCandidatesPreserved || 0} single-owner candidate(s) preserved; ${splitWeightPropagation.stats?.splitRigidWeightOwnershipIssues || 0} conflict(s); no sibling mass copied.`);
   const finalRigidWeightAudit = validateXmlCiiFinalRigidWeightAudit(
     auditXmlCiiRigidWeightsForExport(enriched.xmlText, {
       propagationRows: splitWeightPropagation.appliedRows,
@@ -249,6 +384,16 @@ export async function run(context) {
     collectXmlCiiWeightMatchRows(enriched.xmlText, stagedJsonText, enriched.config),
     enriched.config?.weight?.masterRows || [],
   );
+  const malformedRigidOwners = (finalRigidWeightAudit.allRows || []).filter(
+    (row) => ['MISSING', 'INVALID', 'NEGATIVE'].includes(row.ownerWeightState)
+  );
+  if (malformedRigidOwners.length) {
+    const first = malformedRigidOwners[0];
+    throw new Error(
+      `Python CII export blocked: ${malformedRigidOwners.length} RIGID edge(s) have missing, invalid or negative owner weights. ` +
+      `Example ${first.branchName} / ${first.fromNode} → ${first.toNode} (${first.ownerWeightState}).`
+    );
+  }
   enriched.stats.postExportRigidWeightReviewFlags = finalRigidWeightAudit.summary.flaggedEdges;
   enriched.diagnostics.push(...finalRigidWeightAudit.flagged.map((row) => ({
     type: 'final-rigid-weight-review-required', ...row,
@@ -259,6 +404,25 @@ export async function run(context) {
   ensureEnrichedPreviewLedger(enriched);
   const sideloadLogLines = applyOptionalManualSideload(enriched, runValues).stdout;
   enriched.xmlText = sanitizeXmlTemperatureRanges(enriched.xmlText);
+  const finalOwnership = await enforceModelConvertersRigidOwnership({
+    xmlText: enriched.xmlText,
+    sourceText: originalXmlText,
+    sourceName: primary.name,
+    sourceId: runValues.sourceId || primary.name,
+    stagedJsonText,
+    config: enriched.config,
+    options: runValues,
+    branchSelection: runValues.branchSelection || null,
+  }, {
+    reviewSplitRigidOwnership: runValues.openXmlCiiSplitRigidOwnershipPopup,
+    onSplitRigidOwnershipApproved: runValues.saveXmlCiiRigidOwnershipAllocations,
+  });
+  enriched.splitRigidOwnershipLedger = finalOwnership.splitCustody.componentLedger;
+  rigidReviewLogLines.push(
+    'Final engineer-approved RIGID split custody: ' +
+    finalOwnership.splitCustody.componentLedger.filter((row) => row.status === 'VALIDATED').length +
+    ' allocation(s) validated against final Python XML.'
+  );
   const topologyAudit = buildXmlCiiTopologyDisconnectAudit(enriched.xmlText, { config: enriched.config });
   enriched.stats = { ...(enriched.stats || {}), ...(topologyAudit.stats || {}) };
   enriched.diagnostics = Array.isArray(enriched.diagnostics) ? enriched.diagnostics : [];
@@ -271,13 +435,24 @@ export async function run(context) {
   const serializableOptions = Object.fromEntries(Object.entries({ ...runValues, createEnrichedXml: false }).filter(([, v]) => typeof v !== 'function'));
   context.setStatus?.('Running CII conversion in Python worker...', 'running');
   const ciiResponse = await withTimeout(context.workerRunner.runJob({ converterId: context.converterId, inputFiles: [{ role: 'primary', name: enrichedName, bytes: encodeTextUtf8(enriched.xmlText) }], options: serializableOptions }), 'Python worker conversion');
+  // The worker's actual CII and Python RIGID ledger must reconcile against
+  // the exact XML bytes submitted, *after* sideload and temperature sanitizing.
+  const postPython = await reconcileModelConvertersPythonRigidResponse(enriched.xmlText, ciiResponse,
+    { ...runValues, approvedComponentLedger: finalOwnership.splitCustody.componentLedger });
   const ciiOutputs = Array.isArray(ciiResponse.outputs) ? ciiResponse.outputs : [];
+  rigidReviewLogLines.push('Post-Python RIGID custody PASS: ' +
+    postPython.verification.totalEdges + ' auxiliary edge(s); ' +
+    postPython.verification.positiveEdges + ' positive source owner(s); ' +
+    postPython.verification.normalizedZeroEdges + ' normalized zero edge(s).');
   const stats = enriched.stats;
   const diagnostics = enriched.diagnostics;
-  const diagnosticPayload = { generatedAt: new Date().toISOString(), source: 'latest-run', inputName: primary.name, enrichedName, enrichedStageName, topologyName, diagnosticsName: `${stem}_enrichment_diagnostics.json`, stats, diagnostics, matchedFacts: enriched.matchedFacts || [], rejectedFacts: enriched.rejectedFacts || [], topologyAudit };
+  const diagnosticPayload = { rigidPythonOwnershipReconciliation: postPython.verification, rigidOwnershipSnapshotDigest: finalOwnership.snapshotDigest, splitRigidOwnershipLedger: enriched.splitRigidOwnershipLedger || [], generatedAt: new Date().toISOString(), source: 'latest-run', inputName: primary.name, enrichedName, enrichedStageName, topologyName, diagnosticsName: `${stem}_enrichment_diagnostics.json`, stats, diagnostics, matchedFacts: enriched.matchedFacts || [], rejectedFacts: enriched.rejectedFacts || [], topologyAudit };
   const enrichedStageText = JSON.stringify(buildEnrichedStageJson(enriched.xmlText, diagnosticPayload), null, 2);
   const topologyText = JSON.stringify(topologyAudit, null, 2);
-  const rigidWeightAuditText = JSON.stringify(finalRigidWeightAudit, null, 2);
+  const rigidWeightAuditText = JSON.stringify({
+    ...finalRigidWeightAudit,
+    splitRigidOwnershipLedger: enriched.splitRigidOwnershipLedger || [],
+  }, null, 2);
   const diagnosticText = JSON.stringify(diagnosticPayload, null, 2);
   publishMatchedPreviewDiagnostics(diagnosticPayload);
   const diagnosticRows = (Array.isArray(diagnostics) ? diagnostics : []).map((item) => ({ type: item?.type || '', nodeNumber: item?.nodeNumber || item?.keptNode || item?.removedNode || '', branchName: item?.branchName || '', pipingClass: item?.pipingClass || item?.resolvedPipingClass || '', rating: item?.rating || '', boreMm: item?.boreMm == null ? '' : Number(item.boreMm).toFixed ? Number(item.boreMm).toFixed(3) : item.boreMm, lengthMm: item?.lengthMm == null ? '' : Number(item.lengthMm).toFixed ? Number(item.lengthMm).toFixed(3) : item.lengthMm, weight: item?.weight ?? '', method: item?.method || item?.reason || item?.source || item?.status || '', kind: item?.kind || '', message: item?.message || item?.stagedName || item?.url || item?.reason || '' }));

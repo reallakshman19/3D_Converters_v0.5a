@@ -40,6 +40,7 @@ const SCRIPT_FILE_NAMES = Object.freeze([
   'xml_to_cii2019_patched.py',
   'xml_to_cii2019_direction.py',
   'xml_to_cii2019_contracted_direction.py',
+  'xml_to_cii2019_rigid_ledger.py',
   'xml_to_inputxml_debug.py',
   'xml_to_cii_inputxml_sidecar_diagnostics.py',
   'xml_to_cii2019_master_addon.py',
@@ -652,6 +653,25 @@ async function _runJob(message) {
     { name: invocation.outputName, text: outputText, mime: _inferTextMime(invocation.outputName) },
     ...(compatibilityPreflight?.outputs || []),
   ];
+  if (converterId === 'xml_to_cii') {
+    // The contracted Python path writes the ledger against its actual emitted
+    // CII model. Missing or corrupt sidecars must not release CII output.
+    const ledgerPath = invocation.outputPath.replace(/\.cii$/i, '.rigid_ledger.json');
+    const ledgerName = invocation.outputName.replace(/\.cii$/i, '.rigid_ledger.json');
+    let ledgerText = '';
+    try {
+      ledgerText = pyodide.FS.readFile(ledgerPath, { encoding: 'utf8' });
+    } catch (error) {
+      throw new Error('Model Converters RIGID export blocked: Python ownership ledger missing: ' + _errorToString(error));
+    }
+    const ledger = JSON.parse(ledgerText);
+    if (ledger.schema !== 'xml-cii-rigid-python-emission-ledger/v1'
+        || ledger.authority !== 'ACTUAL_PYTHON_MODEL_AND_EMITTED_CII'
+        || !Array.isArray(ledger.rows)) {
+      throw new Error('Model Converters RIGID export blocked: invalid Python ownership ledger.');
+    }
+    outputs.push({ name: ledgerName, text: ledgerText, mime: 'application/json;charset=utf-8' });
+  }
   let stagedInputXmlDiagnostics = null;
   if (converterId === 'stagedjson_to_inputxml') {
     const diagnosticsName = invocation.outputName.replace(/\.xml$/i, '_stagedjson_to_inputxml_diagnostics.json');

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 
 import {
   compareXmlCiiParityAuthorityEntries,
@@ -126,7 +127,14 @@ test('workflow sends the verified browser-enriched XML to the engine unchanged',
         outputKind: 'enrichedXML',
         enrichedText: '',
         enrichedName: '',
-        ciiText: 'CII FROM VERIFIED XML',
+        ciiText: '#$ VERSION\nX\n#$ RIGID\n#$ EXPJT\n',
+        rigidLedger: {
+          schema:'xml-cii-rigid-python-emission-ledger/v1',
+          authority:'ACTUAL_PYTHON_MODEL_AND_EMITTED_CII',
+          weightScale:10,
+          ciiSha256:createHash('sha256').update('#$ VERSION\nX\n#$ RIGID\n#$ EXPJT\n').digest('hex'),
+          rows:[],summary:{rigidAuxCount:0,positiveCount:0,zeroCount:0},
+        },
         ciiName: 'input.cii',
         diagnostics: { warnings: [] },
         logs: ['engine pass'],
@@ -137,7 +145,8 @@ test('workflow sends the verified browser-enriched XML to the engine unchanged',
 
   assert.equal(engineCalls, 1);
   assert.equal(result.ok, true);
-  assert.equal(result.ciiText, 'CII FROM VERIFIED XML');
+  assert.equal(result.ciiText, '#$ VERSION\nX\n#$ RIGID\n#$ EXPJT\n');
+  assert.equal(result.diagnostics.rigidPythonOwnershipReconciliation.ok, true);
   assert.equal(result.diagnostics.converterInputReleased, true);
   assert.equal(result.diagnostics.converterInputDigest, digest);
   assert.equal(result.diagnostics.runParityEvidence.ok, true);

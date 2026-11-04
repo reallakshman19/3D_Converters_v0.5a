@@ -199,7 +199,7 @@ export function bindActionEvents(container, stateRef, render) {
   onClick(container, 'load-import-masters', () => loadImportMastersFromUi(stateRef, render));
   onClick(container, 'clear-master-context', () => clearMasterContextFromUi(stateRef, render));
   onClick(container, 'run', () => runWorkflowFromUi(stateRef, render));
-  for (const kind of ['enriched', 'cii', 'diagnostics', 'manifest']) onClick(container, `download-${kind}`, () => downloadArtifact(stateRef.current, kind));
+  for (const kind of ['enriched', 'cii', 'rigid-ledger', 'diagnostics', 'manifest']) onClick(container, `download-${kind}`, () => downloadArtifact(stateRef.current, kind));
   onClick(container, 'clear', () => replaceState(stateRef, resetWorkflowState(), render));
 }
 
@@ -324,6 +324,7 @@ function artifactText(state, kind) {
   const report = state.outputRunReadinessReport || buildStandaloneOutputRunReadiness(state);
   if (kind === 'enriched') return { name: state.result?.enrichedName, text: state.result?.enrichedText, mime: 'application/xml;charset=utf-8' };
   if (kind === 'cii') return { name: state.result?.ciiName, text: state.result?.ciiText, mime: 'text/plain;charset=utf-8' };
+  if (kind === 'rigid-ledger') return { name: state.result?.rigidLedgerName || 'rigid_ledger.json', text: state.result?.rigidLedgerText, mime: 'application/json;charset=utf-8' };
   if (kind === 'diagnostics') return { name: 'xml-cii-diagnostics.json', text: JSON.stringify(state.result?.diagnostics || {}, null, 2), mime: 'application/json;charset=utf-8' };
   return { name: 'xml-cii-run-manifest.json', text: JSON.stringify(report.manifest || {}, null, 2), mime: 'application/json;charset=utf-8' };
 }

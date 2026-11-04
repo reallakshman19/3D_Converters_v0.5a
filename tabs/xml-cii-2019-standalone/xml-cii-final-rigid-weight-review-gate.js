@@ -1,5 +1,7 @@
 import { auditXmlCiiRigidWeightsForExport } from '../../converters/xml-cii2019-core/rigid-weight-export-audit.js';
 import { validateXmlCiiFinalRigidWeightAudit } from '../../converters/xml-cii2019-core/rigid-weight-final-validation.js';
+import { applyXmlCiiSplitRigidWeightPropagation } from '../../converters/xml-cii2019-core/split-rigid-weight-propagation.js';
+import { digestRigidOwnershipSnapshot } from '../../converters/xml-cii2019-core/rigid-weight-snapshot.js';
 import {
   applyXmlCiiRigidWeightOverrides,
   collectXmlCiiWeightMatchRows,
@@ -38,6 +40,8 @@ function edgeReviewIssue(row, nodeRows) {
     elementLengthMm: row.elementLengthMm,
     wholeComponentSpanMm: row.wholeComponentSpanMm,
     currentWeightKg: row.massKg,
+    ownerWeightState: row.ownerWeightState || 'POSITIVE',
+    ownerWeightRaw: row.ownerWeightRaw ?? '',
     proposedWeightKg: positive(preview?.weightMatch?.weight),
     exportedWeight: row.exportedWeight,
     exportedUnit: row.exportedUnit,
@@ -85,11 +89,10 @@ export function buildStandaloneFinalRigidReview(parity, config = {}, options = {
     [...collectXmlCiiWeightMatchRows(xmlText, options.stagedJsonText || '', config), ...(parity?.nodeRows || [])],
     config?.weight?.masterRows || [],
   );
-  // Optional inspector in Output / Run is deliberately broader than the
-  // export blocker: it shows every positive physical RIGID element (including
-  // empirically normal 19.1 mm edges) without changing the release policy.
+  // Manual inspection enumerates every pre-Python RIGID candidate, including
+  // zero/missing/invalid owners. Only the positive subset enters A1/A2.
   const selectedRows = options.includeAllPositiveMasses
-    ? audit.rows
+    ? [...audit.rows, ...(audit.allRows || []).filter((row) => row.ownerWeightState !== 'POSITIVE')]
     : audit.rows.filter(isReviewRequired);
   const issues = selectedRows.map((row) => edgeReviewIssue(row, parity?.nodeRows));
   const byKey = new Map(issues.map((issue) => [issue.key, issue]));
@@ -117,7 +120,92 @@ export function buildStandaloneFinalRigidReview(parity, config = {}, options = {
     }
     seen.set(issue.key, identity);
   }
-  return { audit, issues, xmlText };
+  const ownership = config?.rigidOwnership || {};
+  const splitCustody = applyXmlCiiSplitRigidWeightPropagation(xmlText, {
+    sourceId: options.sourceId || '',
+    snapshotDigest: options.snapshotDigest || '',
+    ownershipAllocations: ownership.allocations || {},
+    requireAllocation: ownership.requireAllocation === true,
+  });
+  return { audit, issues, xmlText, splitCustody };
+}
+
+/**
+ * Require one explicit physical mass-custody decision per positive split
+ * component. An empirical ±50% result is plausibility evidence, not approval
+ * to copy, divide, or assign a component's physical mass.
+ */
+export async function enforceStandaloneRigidSplitOwnership(
+  xmlText, job, config = {}, runtime = {}, snapshotDigest = '',
+) {
+  const sourceId = text(job?.sourceId || job?.sourceName || '');
+  const existing = config?.rigidOwnership?.allocations || {};
+  const inspect = (allocations) => applyXmlCiiSplitRigidWeightPropagation(xmlText, {
+    sourceId, snapshotDigest, ownershipAllocations: allocations, requireAllocation: true,
+  });
+  let custody = inspect(existing);
+  const pending = custody.componentLedger.filter((row) => {
+    if (row.status === 'BLOCKED') return true;
+    if (row.positiveNodes <= 0) return false; // never guess mass for all-zero sources
+    const record = existing[row.componentOccurrenceId];
+    return row.status !== 'VALIDATED' || record?.approvedByEngineer !== true;
+  });
+  if (!pending.length && !custody.ownershipIssues.length) {
+    return { ok: true, splitCustody: custody, approvedAllocations: {} };
+  }
+  if (typeof runtime.reviewSplitRigidOwnership !== 'function') {
+    return {
+      ok: false, splitCustody: custody,
+      error: 'RIGID split physical ownership approval is required for ' +
+        pending.length + ' component occurrence(s) before CII export. ' +
+        'No engineer ownership review dialog is connected.',
+    };
+  }
+  const reply = await runtime.reviewSplitRigidOwnership(pending, {
+    sourceName: job?.sourceName || '', sourceId, snapshotDigest,
+  });
+  if (!reply || reply.cancelled) {
+    return {
+      ok: false, splitCustody: custody,
+      error: 'RIGID split physical ownership review cancelled; Python export blocked.',
+    };
+  }
+  const supplied = reply.allocationsById || {};
+  if (Object.keys(supplied).length !== pending.length) {
+    return { ok: false, splitCustody: custody,
+      error: 'RIGID physical ownership approval did not cover each required component exactly once.' };
+  }
+  const approvedAllocations = {};
+  for (const group of pending) {
+    const row = supplied[group.componentOccurrenceId];
+    if (!row || row.approvedByEngineer !== true ||
+        row.sourceId !== sourceId || row.snapshotDigest !== snapshotDigest) {
+      return { ok: false, splitCustody: custody,
+        error: 'Unconfirmed or stale RIGID component ownership: ' + group.componentOccurrenceId };
+    }
+    approvedAllocations[group.componentOccurrenceId] = row;
+  }
+  const all = { ...existing, ...approvedAllocations };
+  custody = inspect(all);
+  const failed = custody.componentLedger.find((row) =>
+    (row.positiveNodes > 0 || row.status === 'BLOCKED')
+      && (row.status !== 'VALIDATED'
+        || all[row.componentOccurrenceId]?.approvedByEngineer !== true));
+  if (custody.ownershipIssues.length || failed) {
+    const first = custody.ownershipIssues[0] || failed;
+    return {
+      ok: false, splitCustody: custody,
+      error: 'RIGID component mass conservation/owner validation failed for ' +
+        first.componentOccurrenceId + ' (' + (first.reason || first.status) + ').',
+    };
+  }
+  if (Object.keys(approvedAllocations).length &&
+      typeof runtime.onSplitRigidOwnershipApproved === 'function') {
+    await runtime.onSplitRigidOwnershipApproved({
+      sourceId, snapshotDigest, allocationsById: approvedAllocations,
+    });
+  }
+  return { ok: true, splitCustody: custody, approvedAllocations };
 }
 
 export async function enforceStandaloneFinalRigidWeightReview(parity, job, runtime = {}) {
@@ -130,15 +218,51 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   const preapplied = Object.keys(reviewOverrides).length
     ? applyXmlCiiRigidWeightOverrides(parity.xmlText, reviewOverrides)
     : { xmlText: parity.xmlText, appliedCount: 0 };
+  const snapshotDigest = await digestRigidOwnershipSnapshot({
+    sourceId: job?.sourceId || job?.sourceName || '',
+    sourceName: job?.sourceName || '',
+    sourceText: job?.sourceText || '',
+    stagedJsonText: job?.stagedJsonText || '',
+    supportConfigJson: job?.supportConfigJson || '{}',
+    branchSelection: job?.branchSelection || null,
+    options: job?.options || {},
+    preparedXmlText: preapplied.xmlText,
+  });
   const gate = buildStandaloneFinalRigidReview(
     { ...parity, xmlText: preapplied.xmlText },
     config,
     {
       kgToNewton: job?.options?.kgToNewton !== false,
       stagedJsonText: job?.stagedJsonText || '',
+      sourceId: job?.sourceId || job?.sourceName || '',
+      snapshotDigest,
     },
   );
-  if (!gate.issues.length) return { ok: true, xmlText: gate.xmlText, audit: gate.audit, reviewedRows: [], issues: [] };
+  // Empirical plausibility never overrides a split component with multiple
+  // positive or invalid sibling masses. Do not run Python with ambiguous owners.
+  const malformedRigdOwners = (gate.audit?.allRows || []).filter(
+    (row) => ['MISSING', 'INVALID', 'NEGATIVE'].includes(row.ownerWeightState)
+  );
+  if (malformedRigdOwners.length) {
+    const first = malformedRigdOwners[0];
+    return {
+      ok: false,
+      error: `Invalid or missing RIGID mass on ${malformedRigdOwners.length} pre-Python edge(s). ` +
+        `Example: ${first.branchName} / ${first.fromNode} → ${first.toNode} (${first.ownerWeightState}). ` +
+        'Structural ownership must be resolved before Python export.',
+      ...gate,
+    };
+  }
+  // Split ownership is signed against the *final* XML, after any empirical
+  // weight correction. Defer this separate physical-ownership decision until
+  // the exact Python input and SHA-256 snapshot are known.
+  if (!gate.issues.length) {
+    const ownership = await enforceStandaloneRigidSplitOwnership(
+      gate.xmlText, job, config, runtime, snapshotDigest,
+    );
+    return { ...ownership, xmlText: gate.xmlText, audit: gate.audit,
+      snapshotDigest, reviewedRows: [], issues: [] };
+  }
   const identification = gate.issues.map((item) => `${item.fromNode || '?'} → ${item.toNode}: ${item.reviewFlags.join('/')}`).join('; ');
   if (typeof runtime.reviewFinalRigidWeights !== 'function') {
     return { ok: false, error: `Final rigid weight review required before CII export: ${identification}. No review dialog is connected.`, ...gate };
@@ -162,6 +286,37 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   if (applied.appliedCount !== gate.issues.length) {
     return { ok: false, error: `Final rigid weight changes affected ${applied.appliedCount} node(s); expected ${gate.issues.length}. Ambiguous target or missing node: CII export blocked.`, ...gate };
   }
+  // Manual mass approval changes the exact Python input. Recompute custody
+  // rather than reusing a pre-approval digest for a different XML snapshot.
+  // The numeric approvals will be saved to config.overrides.rigidWeight after
+  // the ownership transaction. Hash that effective future config now so the
+  // persisted owner approval still matches the next run of the same XML.
+  // Weight matching may populate transient resolver hints in its working
+  // config. They are NOT input policy and must not make a user approval
+  // impossible to persist or regenerate for identical source and masters.
+  // Reparse the unmodified job config before binding explicit overrides.
+  const pristineJobConfig = JSON.parse(text(job?.supportConfigJson) || '{}');
+  const effectiveConfig = {
+    ...pristineJobConfig,
+    overrides: {
+      ...(pristineJobConfig.overrides || {}),
+      rigidWeight: { ...(pristineJobConfig.overrides?.rigidWeight || {}), ...permitted },
+    },
+  };
+  const finalSnapshotDigest = await digestRigidOwnershipSnapshot({
+    sourceId: job?.sourceId || job?.sourceName || '',
+    sourceName: job?.sourceName || '',
+    sourceText: job?.sourceText || '',
+    stagedJsonText: job?.stagedJsonText || '',
+    supportConfigJson: JSON.stringify(effectiveConfig),
+    branchSelection: job?.branchSelection || null,
+    options: job?.options || {},
+    preparedXmlText: applied.xmlText,
+  });
+  const ownership = await enforceStandaloneRigidSplitOwnership(
+    applied.xmlText, job, config, runtime, finalSnapshotDigest,
+  );
+  if (!ownership.ok) return { ...ownership, ...gate, ok: false, error: ownership.error };
   const reviewedRows = gate.issues.map((issue) => ({
     branchName: issue.branchName, fromNode: issue.fromNode, toNode: issue.toNode,
     componentRefNo: issue.componentRefNo, key: issue.key,
@@ -171,5 +326,5 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   if (typeof runtime.onFinalRigidWeightsApplied === 'function') {
     await runtime.onFinalRigidWeightsApplied({ weightsByKey: permitted, reviewedRows });
   }
-  return { ok: true, xmlText: applied.xmlText, audit: gate.audit, reviewedRows, issues: gate.issues };
+  return { ...ownership, ok: true, xmlText: applied.xmlText, audit: gate.audit, snapshotDigest: finalSnapshotDigest, reviewedRows, issues: gate.issues };
 }
