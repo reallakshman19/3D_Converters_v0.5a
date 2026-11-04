@@ -57,6 +57,7 @@ export async function reconcileModelConvertersPythonRigidResponse(xmlText, respo
     ciiText: cii[0].text,
     rigidLedger: ledger,
     kgToNewton: options.kgToNewton !== false,
+    componentLedger: options.approvedComponentLedger ?? null,
   });
   return { verification: verified, ledger, cii: cii[0] };
 }
@@ -299,7 +300,8 @@ export async function run(context) {
     context.setStatus?.('Starting Python worker...', 'running');
     const serializableOptions = Object.fromEntries(Object.entries(runValues).filter(([, v]) => typeof v !== 'function'));
     const directResponse = await withTimeout(context.workerRunner.runJob({ converterId: context.converterId, inputFiles: context.inputFiles, options: serializableOptions }), 'Python worker conversion');
-    const directVerified = await reconcileModelConvertersPythonRigidResponse(originalXmlText, directResponse, runValues);
+    const directVerified = await reconcileModelConvertersPythonRigidResponse(originalXmlText, directResponse,
+      { ...runValues, approvedComponentLedger: directOwnership.splitCustody.componentLedger });
     return {
       ...directResponse,
       logs: { ...(directResponse.logs || {}), stdout: [
@@ -435,7 +437,8 @@ export async function run(context) {
   const ciiResponse = await withTimeout(context.workerRunner.runJob({ converterId: context.converterId, inputFiles: [{ role: 'primary', name: enrichedName, bytes: encodeTextUtf8(enriched.xmlText) }], options: serializableOptions }), 'Python worker conversion');
   // The worker's actual CII and Python RIGID ledger must reconcile against
   // the exact XML bytes submitted, *after* sideload and temperature sanitizing.
-  const postPython = await reconcileModelConvertersPythonRigidResponse(enriched.xmlText, ciiResponse, runValues);
+  const postPython = await reconcileModelConvertersPythonRigidResponse(enriched.xmlText, ciiResponse,
+    { ...runValues, approvedComponentLedger: finalOwnership.splitCustody.componentLedger });
   const ciiOutputs = Array.isArray(ciiResponse.outputs) ? ciiResponse.outputs : [];
   rigidReviewLogLines.push('Post-Python RIGID custody PASS: ' +
     postPython.verification.totalEdges + ' auxiliary edge(s); ' +
