@@ -25,11 +25,12 @@ jobs:
         run: |
           set -euo pipefail
           node --check tests/glrd_issue9_cache_containment_browser.mjs
+          node --check tests/glrd_issue9_real_workbench_v7_wrapper_probe.mjs
           git merge-base --is-ancestor 814157b162b981c9876f564f3cb0474435c8c37e HEAD
           git diff --name-only 814157b162b981c9876f564f3cb0474435c8c37e HEAD
           git diff --name-only 814157b162b981c9876f564f3cb0474435c8c37e HEAD | while read -r file; do
             case "$file" in
-              tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer.js|tests/glrd_issue9_cache_containment_browser.mjs|.github/workflows/glrd-issue9-preview-cache-containment.yml) ;;
+              tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer.js|tests/glrd_issue9_cache_containment_browser.mjs|tests/glrd_issue9_real_workbench_v7_wrapper_probe.mjs|.github/workflows/glrd-issue9-preview-cache-containment.yml) ;;
               *) echo "Unexpected file changed: $file"; exit 1;;
             esac
           done
@@ -91,6 +92,31 @@ jobs:
             --material-map /tmp/glrd/inputs/material-map.txt \
             --out /tmp/glrd/outputs --label optimized --audit-mode baseline \
             --expected-sha "$GITHUB_SHA" --chromium "$CHROME_BIN"
+      - name: Verify actual standalone v7 wrapper rating snapshot and DTXR button
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          node tests/glrd_issue9_real_workbench_v7_wrapper_probe.mjs \
+            --root "$PWD" --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/outputs --label optimized \
+            --expected-sha "$GITHUB_SHA" --chromium "$CHROME_BIN"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          r=json.loads(Path('/tmp/glrd/outputs/optimized-v7-wrapper-audit.json').read_text())
+          assert r['status']=='PASS',r
+          first=r['observed']['first']
+          assert first['rendered'] and first['branchRows']==30,first
+          assert first['envelopePresent'] and r['observed']['envelopePayloadRows']==30,first
+          assert first['dtxrRatingButton'], 'DTXR rating action must be present in real v7 workbench'
+          assert first['ratingSnapshotCount']==30,first
+          assert first['status']=='REBUILT',first
+          print('LIVE_V7_G3_COMPONENT_GATE_PASS',json.dumps(first,indent=2))
+          PY
       - name: Capture unchanged Phase 1 browser Preview and actual enriched XML
         run: |
           CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
