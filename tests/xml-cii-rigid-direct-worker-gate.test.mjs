@@ -18,7 +18,7 @@ const job = (xml) => ({
   setStatus: () => {},
   workerRunner: { runJob: async () => {
     workerCalls++;
-    const cii = '#$ RIGID\\n150 0\\n#$ EXPJT\\n';
+    const cii = '#$ RIGID\n150 0\n#$ EXPJT\n';
     const ledger = {
       schema:'xml-cii-rigid-python-emission-ledger/v1',
       authority:'ACTUAL_PYTHON_MODEL_AND_EMITTED_CII',
