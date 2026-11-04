@@ -98,4 +98,42 @@ await assert.rejects(verify({
 await assert.rejects(verify({
   rigidLedger:{...ledger,rows:[{...ledger.rows[0],toPosition:[88.9,0,0]},ledger.rows[1]]},
 }),/exact approved source owner/);
+
+// Python can prune a negative-number intermediate FLAN and form a new RIGID
+// auxiliary from the original endpoints. Zero mass is harmless but remains
+// explicitly visible as a normalized zero non-owner. Positive mass must block.
+const normalizedXml = '<PipeStressExport><Pipe><Branch><Branchname>B-NORM</Branchname>' +
+  '<Node><NodeNumber>3700</NodeNumber><Position>0 0 0</Position><ComponentType>RIGID</ComponentType><Rigid>2</Rigid><Weight>0</Weight></Node>' +
+  '<Node><NodeNumber>-1</NodeNumber><Position>0 0 0</Position><ComponentType>FLAN</ComponentType><Weight>0</Weight></Node>' +
+  '<Node><NodeNumber>3710</NodeNumber><Position>121 0 0</Position><ComponentType>FLAN</ComponentType><Endpoint>2</Endpoint><ComponentRefNo>=F</ComponentRefNo><Weight>0</Weight></Node>' +
+  '</Branch></Pipe></PipeStressExport>';
+const normalizedCii = '#$ RIGID\n0 0\n#$ EXPJT\n';
+const normalizedRow = {
+  rigidAuxIndex:1, edgeIndex:1, branchName:'B-NORM',branchOccurrence:0,
+  fromNode:3700,toNode:3710,fromNodeOccurrence:0,toNodeOccurrence:2,
+  fromComponentType:'RIGID',toComponentType:'FLAN',
+  fromPosition:[0,0,0],toPosition:[121,0,0],toEndpoint:2,
+  componentRefNo:'=F',massKg:0,expectedCiiMass:0,emittedCiiMass:0,weightState:'ZERO',
+};
+const normalizedLedger = {
+  schema:'xml-cii-rigid-python-emission-ledger/v1',
+  authority:'ACTUAL_PYTHON_MODEL_AND_EMITTED_CII',
+  weightScale:10, ciiSha256:await digest(normalizedCii),
+  summary:{rigidAuxCount:1,positiveCount:0,zeroCount:1},
+  rows:[normalizedRow],
+};
+const normalized = await verify({
+  reviewedXmlText:normalizedXml,ciiText:normalizedCii,rigidLedger:normalizedLedger,
+});
+assert.equal(normalized.normalizedZeroEdges,1);
+const normalizedPositiveXml = normalizedXml.replace('<NodeNumber>3710</NodeNumber><Position>121 0 0</Position><ComponentType>FLAN</ComponentType><Endpoint>2</Endpoint><ComponentRefNo>=F</ComponentRefNo><Weight>0</Weight>',
+  '<NodeNumber>3710</NodeNumber><Position>121 0 0</Position><ComponentType>FLAN</ComponentType><Endpoint>2</Endpoint><ComponentRefNo>=F</ComponentRefNo><Weight>15</Weight>');
+const normalizedPositiveCii = normalizedCii.replace('0 0','150 0');
+await assert.rejects(verify({
+  reviewedXmlText:normalizedPositiveXml,ciiText:normalizedPositiveCii,
+  rigidLedger:{...normalizedLedger,ciiSha256:await digest(normalizedPositiveCii),
+    summary:{rigidAuxCount:1,positiveCount:1,zeroCount:0},
+    rows:[{...normalizedRow,massKg:15,expectedCiiMass:150,emittedCiiMass:150,weightState:'POSITIVE'}]},
+}),/unreviewed positive RIGID edge/);
+
 console.log('POST_PYTHON_RIGID_CII_OWNERSHIP_RECONCILE_PASS');
