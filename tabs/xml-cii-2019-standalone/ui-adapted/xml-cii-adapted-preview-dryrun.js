@@ -7,14 +7,6 @@ import { applyPreviewRatingAuthority } from './xml-cii-adapted-preview-rating-au
 
 const AUTOMATIC_LINE_MATCH_METHODS = new Set(['similar-lineseq', 'similar-linekey']);
 const LINE_AUTHORITY_VERSION = 'strict-explicit-or-exact-v1';
-const LINE_AUTHORITY_MARKER_KEY = 'xml-cii-preview-line-authority-version';
-const PREVIEW_CACHE_KEYS = Object.freeze([
-  'xml-cii-pv-cache-v8-rating-policy',
-  'xml-cii-pv-cache-v8-dtxr',
-  'xml-cii-pv-cache-v7',
-  'xml-cii-pv-cache-v6',
-]);
-
 function text(value) {
   return value === undefined || value === null ? '' : String(value).trim();
 }
@@ -165,13 +157,9 @@ export function buildStrictLineAuthorityCorePreview(
   };
 }
 
-try {
-  if (typeof localStorage !== 'undefined'
-    && localStorage.getItem(LINE_AUTHORITY_MARKER_KEY) !== LINE_AUTHORITY_VERSION) {
-    for (const key of PREVIEW_CACHE_KEYS) localStorage.removeItem(key);
-    localStorage.setItem(LINE_AUTHORITY_MARKER_KEY, LINE_AUTHORITY_VERSION);
-  }
-} catch {}
+// Strict line authority is enforced by the calculation below. No persisted
+// Preview payload is eligible for restoration, so importing this module must
+// not read or delete prior-session engineering results.
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   import('../../xml-cii-effective-class-shard-hydrator.js')

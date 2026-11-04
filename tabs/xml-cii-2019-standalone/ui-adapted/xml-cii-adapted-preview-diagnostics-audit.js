@@ -96,11 +96,10 @@ function _esc(value) {
     .replaceAll("'", '&#39;');
 }
 
-function invalidatePreviewCaches() {
-  if (typeof localStorage === 'undefined') return;
-  for (const key of ['xml-cii-pv-cache-v8-dtxr', 'xml-cii-pv-cache-v7', 'xml-cii-pv-cache-v6', 'xml-cii-pv-cache-v2', 'xml-cii-wm-cache-v1']) {
-    try { localStorage.removeItem(key); } catch {}
-  }
+// The non-v7 config-save path must not read or delete persisted Preview rows.
+// Preserve the existing legacy Weight Match invalidation on config changes.
+export function invalidatePreviewCaches() {
+  try { globalThis.localStorage?.removeItem('xml-cii-wm-cache-v1'); } catch {}
 }
 
 function _datalistHtml(id, values) {

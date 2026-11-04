@@ -148,10 +148,11 @@ test('explicit branch mapping that resolves exactly is preserved', () => {
   assert.equal(result.branchRows[0].p1, '11600');
 });
 
-test('deployment invalidates the previous fuzzy Preview cache once', async () => {
+test('strict line authority does not read or delete persisted Preview engineering rows', async () => {
   const source = await readFile(fileURLToPath(new URL(`../${sourcePath}`, import.meta.url)), 'utf8');
   assert.match(source, /strict-explicit-or-exact-v1/);
-  assert.match(source, /xml-cii-pv-cache-v8-rating-policy/);
   assert.match(source, /automaticMatchesRemoved/);
+  assert.doesNotMatch(source, /PREVIEW_CACHE_KEYS|xml-cii-pv-cache-v8-dtxr/);
+  assert.doesNotMatch(source, /localStorage\.removeItem/);
   assert.doesNotMatch(source, /lineKeyProposed:\s*similar\.proposedKey/);
 });
