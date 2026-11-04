@@ -149,7 +149,13 @@ const EXPRESSION=String.raw`(async()=>{
   await fileUpload('[data-field="staged-json-file"]',stage,'STF_2026Nov03-0839_managed_stage.json','application/json','uploaded staged JSON via UI');
   await wait(()=>root.textContent.includes('Staged JSON: Loaded'),'staged JSON status');
   choose('[data-phase="preview"]','entered Step 4 Preview phase');
-  const buildButton=await wait(()=>root.querySelector('[data-mc-preview-build]'),'manual Preview button');
+  // renderStandalonePreviewReportPanel is async; the initial static HTML can
+  // contain a Build button BEFORE v7 finishes hashing inputs and wiring its
+  // actual click listener. Wait for v7's post-hydration status, not DOM presence.
+  const initialV7Status=await wait(()=>root.querySelector('#mc-preview-table-host')?.dataset?.mcPreviewCacheStatus,
+    'v7 Preview wrapper finished asynchronous cache authority initialization',20000);
+  steps.push('v7 Preview ready: '+initialV7Status);
+  const buildButton=await wait(()=>root.querySelector('[data-mc-preview-build]'),'wired manual Preview button');
   buildButton.click();steps.push('clicked actual Build Preview');
   await wait(()=>root.querySelectorAll('tr.mc-preview-row').length===30,'30 rendered GLRD Preview branches',40000);
   await wait(()=>!!root.querySelector('[data-mc-dtxr-rating-fetch]'),'DTXR rating action',12000);
