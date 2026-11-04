@@ -112,3 +112,32 @@ test('R4 B31.3 audit reader: zero input without current commit, not stale persis
     assert.equal(values.get(OLD_KEY), OLD_RESULT);
   });
 });
+
+
+test('R4 direct handoff: a newly reserved generation cannot expose the previous B31.3 rows', async () => {
+  const { createCurrentPreviewB313Handoff } =
+    await import('../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-diagnostics-audit-v7.js');
+  await withStorage(async ({ calls, values }) => {
+    const host = { dataset: { mcPreviewBuildCompleted: 'false' }, __xmlCiiPreviewGeneration: 4 };
+    const handoff = createCurrentPreviewB313Handoff(host);
+    const oldRows = [{ branchName: '/PREVIOUS/B1', rating: '150' }];
+    handoff.onPreviewCommitted({ branchRows: oldRows, generation: 4 });
+    assert.deepEqual(handoff.getCommittedPreviewRows(), [], 'callback before completion is not current');
+    host.dataset.mcPreviewBuildCompleted = 'true';
+    assert.deepEqual(handoff.getCommittedPreviewRows(), oldRows);
+
+    // Manual Build reserves generation 5 before onPreviewStarted is invoked.
+    host.__xmlCiiPreviewGeneration = 5;
+    assert.deepEqual(handoff.getCommittedPreviewRows(), [], 'old result must disappear immediately on reservation');
+    handoff.onPreviewCommitted({ branchRows: oldRows, generation: 4 });
+    assert.deepEqual(handoff.getCommittedPreviewRows(), [], 'stale callback cannot republish generation 4');
+    handoff.onPreviewStarted();
+    const newRows = [{ branchName: '/CURRENT/B1', rating: '900' }];
+    handoff.onPreviewCommitted({ branchRows: newRows, generation: 5 });
+    assert.deepEqual(handoff.getCommittedPreviewRows(), [], 'new result is hidden until successful completion');
+    host.dataset.mcPreviewBuildCompleted = 'true';
+    assert.deepEqual(handoff.getCommittedPreviewRows(), newRows);
+    assert.deepEqual(calls.reads, []);
+    assert.equal(values.get(OLD_KEY), OLD_RESULT);
+  });
+});

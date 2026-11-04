@@ -15,6 +15,30 @@ import {
 
 export { renderStandaloneDiagnosticsReportPanel };
 
+// B31.3 receives only the successful Preview generation's branch rows.
+// A manual Build reserves its next generation before the calculation starts;
+// that reservation alone must invalidate access to the previous result.
+export function createCurrentPreviewB313Handoff(host) {
+  let committedRows = [];
+  let committedGeneration = null;
+  return {
+    onPreviewStarted: () => {
+      committedRows = [];
+      committedGeneration = null;
+    },
+    onPreviewCommitted: ({ branchRows, generation } = {}) => {
+      if (host?.__xmlCiiPreviewGeneration !== generation) return;
+      committedRows = Array.isArray(branchRows) ? branchRows.map((row) => ({ ...row })) : [];
+      committedGeneration = generation;
+    },
+    getCommittedPreviewRows: () => host?.dataset?.mcPreviewBuildCompleted === 'true'
+      && committedGeneration !== null
+      && host.__xmlCiiPreviewGeneration === committedGeneration
+      ? committedRows
+      : [],
+  };
+}
+
 function esc(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -57,17 +81,8 @@ export async function renderStandalonePreviewReportPanel(card, stateRef, render)
     }
   };
 
-  // B31.3 actions consume only the current successful direct Preview commit.
-  // This is an in-memory handoff, never a persisted or reusable cache.
-  let committedPreviewRows = [];
   const options = {
-    onPreviewStarted: () => { committedPreviewRows = []; },
-    onPreviewCommitted: ({ branchRows }) => {
-      committedPreviewRows = Array.isArray(branchRows) ? branchRows.map((row) => ({ ...row })) : [];
-    },
-    getCommittedPreviewRows: () => host.dataset.mcPreviewBuildCompleted === 'true'
-      ? committedPreviewRows
-      : [],
+    ...createCurrentPreviewB313Handoff(host),
     onSaveConfig: (newCfg) => persistConfig(newCfg, { clearPreview: true }),
     onSaveConfigPreservePreview: (newCfg) => persistConfig(newCfg, { clearPreview: false }),
     onB313WallUpdateReport: (report) => {
