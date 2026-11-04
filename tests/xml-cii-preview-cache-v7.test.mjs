@@ -104,7 +104,8 @@ test('phase routing and internal rebuild capture use the cache v7 boundary', () 
 
   assert.match(phasePanels, /xml-cii-adapted-preview-diagnostics-audit-v7\.js/);
   assert.match(renderer, /createPreviewCacheAuthority/);
-  assert.match(renderer, /MutationObserver/);
+  assert.doesNotMatch(renderer, /MutationObserver/);
+  assert.match(renderer, /onPreviewCommitted/);
   assert.match(renderer, /capturePreviewCacheV7/);
   assert.match(renderer, /data-mc-preview-cache-evidence/);
   assert.match(facade, /clearPreviewCachesV7/);
