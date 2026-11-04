@@ -288,12 +288,22 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   }
   // Manual mass approval changes the exact Python input. Recompute custody
   // rather than reusing a pre-approval digest for a different XML snapshot.
+  // The numeric approvals will be saved to config.overrides.rigidWeight after
+  // the ownership transaction. Hash that effective future config now so the
+  // persisted owner approval still matches the next run of the same XML.
+  const effectiveConfig = {
+    ...config,
+    overrides: {
+      ...(config.overrides || {}),
+      rigidWeight: { ...(config.overrides?.rigidWeight || {}), ...permitted },
+    },
+  };
   const finalSnapshotDigest = await digestRigidOwnershipSnapshot({
     sourceId: job?.sourceId || job?.sourceName || '',
     sourceName: job?.sourceName || '',
     sourceText: job?.sourceText || '',
     stagedJsonText: job?.stagedJsonText || '',
-    supportConfigJson: job?.supportConfigJson || '{}',
+    supportConfigJson: JSON.stringify(effectiveConfig),
     branchSelection: job?.branchSelection || null,
     options: job?.options || {},
     preparedXmlText: applied.xmlText,
