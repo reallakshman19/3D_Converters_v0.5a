@@ -190,12 +190,15 @@ export function publishXmlCiiDisplayedPreviewRatingSnapshot(root, metadata = {})
 
 export function clearXmlCiiPreviewRatingSnapshot() {
   try { delete globalThis[LIVE_SNAPSHOT_KEY]; } catch {}
-  if (typeof localStorage === 'undefined') return;
+  // The browser can throw while merely accessing its storage property.
+  let storage;
+  try { storage = globalThis.localStorage; } catch { return; }
+  if (!storage) return;
   for (const key of [
     XML_CII_PREVIEW_RATING_SNAPSHOT_KEY,
     XML_CII_PREVIEW_RATING_SNAPSHOT_LEGACY_KEY,
   ]) {
-    try { localStorage.removeItem(key); } catch {}
+    try { storage.removeItem(key); } catch {}
   }
 }
 

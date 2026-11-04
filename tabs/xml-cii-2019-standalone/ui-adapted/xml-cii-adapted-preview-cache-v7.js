@@ -131,7 +131,13 @@ export function capturePreviewCacheV7(authority, storage, maxBytes = DEFAULT_MAX
     legacyPayload,
     writtenAt: new Date().toISOString(),
   };
-  const serialized = JSON.stringify(envelope);
+  let serialized;
+  try {
+    serialized = JSON.stringify(envelope);
+  } catch (error) {
+    // Serialization is optional persistence, not an engineering failure.
+    return { stored: false, reason: 'cache-serialization-failed', error };
+  }
   if (serialized.length > maxBytes) {
     try { target.removeItem(XML_CII_PREVIEW_CACHE_KEY); } catch {}
     return { stored: false, reason: 'cache-envelope-too-large', bytes: serialized.length };

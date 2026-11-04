@@ -31,9 +31,10 @@ export function createDefaultWorkflowOptions() {
 }
 
 export function getStoredJson(key, defaultVal = null) {
-  if (typeof localStorage === 'undefined') return defaultVal;
   try {
-    const val = localStorage.getItem(key);
+    const storage = globalThis.localStorage;
+    if (!storage) return defaultVal;
+    const val = storage.getItem(key);
     return val ? JSON.parse(val) : defaultVal;
   } catch {
     return defaultVal;
@@ -41,10 +42,11 @@ export function getStoredJson(key, defaultVal = null) {
 }
 
 export function setStoredJson(key, value) {
-  if (typeof localStorage === 'undefined') return;
   try {
-    if (value) localStorage.setItem(key, JSON.stringify(value));
-    else localStorage.removeItem(key);
+    const storage = globalThis.localStorage;
+    if (!storage) return;
+    if (value) storage.setItem(key, JSON.stringify(value));
+    else storage.removeItem(key);
   } catch {}
 }
 
@@ -79,8 +81,10 @@ export function findSmartMatchingMapping(filename, savedKeys) {
 }
 
 export function saveMasterContextToLocalStorage(context) {
-  if (!context || typeof localStorage === 'undefined') return;
+  if (!context) return;
   try {
+    const storage = globalThis.localStorage;
+    if (!storage) return;
     // Strip all large arrays — they are persisted under their own dedicated keys
     const strippedConfig = context.config ? (() => {
       const c = { ...context.config };
@@ -104,7 +108,7 @@ export function saveMasterContextToLocalStorage(context) {
       // = map`) and is rebuilt on load anyway — it must not be JSON.stringify'd.
       pipingClassIndex: null,
     };
-    localStorage.setItem('xml-cii-import-masters-v1', JSON.stringify(cleaned));
+    storage.setItem('xml-cii-import-masters-v1', JSON.stringify(cleaned));
   } catch (e) {
     console.error('Failed to save master config overrides:', e);
   }
