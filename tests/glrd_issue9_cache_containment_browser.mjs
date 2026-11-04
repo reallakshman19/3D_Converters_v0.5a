@@ -136,7 +136,10 @@ const EXPRESSION=String.raw`(async()=>{
   const start=performance.now();
   await renderer.xmlCiiBuildAndRenderPreview(root,xml,config,{...options,forceBuild:true});
   const firstMs=performance.now()-start;
-  if(localStorage.getItem(keyName)!==null)throw Error('Containment still writes untrusted persisted Preview cache');
+  const bridgeAfterBuild=JSON.parse(localStorage.getItem(keyName)||'null');
+  if(bridgeAfterBuild?.fp!=='explicit-preview-build-v1-not-a-reuse-key'
+    ||bridgeAfterBuild?.data?.branchRows?.length!==30)
+    throw Error('No explicit-build handoff for v7 Preview rating authority');
   const initial=prev.xmlCiiDryRunPreview(xml,structuredClone(config),staged);
   if(initial.branchRows.length!==30)throw Error('GLRD branch count changed');
   const index=initial.branchRows.findIndex(row=>row.lineKey&&row.rating&&row.pipingClass);
@@ -181,11 +184,15 @@ const EXPRESSION=String.raw`(async()=>{
     poll();
   });
   if(stagedResolvers<=beforeIdleResolutions)throw Error('Build button did not resolve pinned staged source');
-  if(localStorage.getItem(keyName)!==oldEntry)throw Error('New renderer persisted an untrusted cache entry');
+  const finalBridge=JSON.parse(localStorage.getItem(keyName)||'null');
+  if(finalBridge?.fp!=='explicit-preview-build-v1-not-a-reuse-key'
+    ||String(finalBridge?.data?.branchRows?.[index]?.rating)!==String(corrected.rating))
+    throw Error('Actual manual Build did not publish fresh v7 bridge data');
   return {
     status:'PASS',scope:'actual Chromium renderer DOM and button-click; not full app import/navigation',
     realRendererInvoked:true,
     legacyCacheIgnored:true,failClosedIdle:true,manualBuildButtonWorked:true,
+    v7BridgeOnlyAfterExplicitBuild:true,
     actualSourceCommit:location.origin,targetIndex:index,
     branchName:target.branchName,overrideKey:classKey,
     oldRating:String(target.rating),newRating:String(corrected.rating),
