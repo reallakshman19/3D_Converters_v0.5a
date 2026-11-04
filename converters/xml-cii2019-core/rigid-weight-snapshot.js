@@ -24,6 +24,15 @@ function sanitizedConfig(raw) {
   }
   return clean;
 }
+// SHA-256 over structured input requires deterministic object-key order.
+// Source/staged XML/JSON strings remain byte-for-byte distinct as intended;
+// only parsed config/options object insertion order is normalized.
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
+}
+
 export async function digestRigidOwnershipSnapshot({
   sourceId = '', sourceName = '', sourceText = '', stagedJsonText = '',
   supportConfigJson = '{}', branchSelection = null, options = {},
@@ -35,7 +44,7 @@ export async function digestRigidOwnershipSnapshot({
   }
   const safeOptions = { ...(options || {}) };
   delete safeOptions.verifiedWeightSnapshotDigest;
-  const snapshot = JSON.stringify({
+  const snapshot = JSON.stringify(canonical({
     schema: 'rigid-ownership-approval-snapshot/v1',
     sourceId: text(sourceId),
     sourceName: text(sourceName),
@@ -45,7 +54,7 @@ export async function digestRigidOwnershipSnapshot({
     branchSelection,
     options: safeOptions,
     preparedXmlText: text(preparedXmlText),
-  });
+  }));
   const raw = await subtle.digest('SHA-256', new TextEncoder().encode(snapshot));
   return 'sha256:' + [...new Uint8Array(raw)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
