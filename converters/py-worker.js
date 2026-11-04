@@ -656,8 +656,8 @@ async function _runJob(message) {
   if (converterId === 'xml_to_cii') {
     // The contracted Python path writes the ledger against its actual emitted
     // CII model. Missing or corrupt sidecars must not release CII output.
-    const ledgerPath = invocation.outputPath.replace(/\\.cii$/i, '.rigid_ledger.json');
-    const ledgerName = invocation.outputName.replace(/\\.cii$/i, '.rigid_ledger.json');
+    const ledgerPath = invocation.outputPath.replace(/\.cii$/i, '.rigid_ledger.json');
+    const ledgerName = invocation.outputName.replace(/\.cii$/i, '.rigid_ledger.json');
     let ledgerText = '';
     try {
       ledgerText = pyodide.FS.readFile(ledgerPath, { encoding: 'utf8' });
