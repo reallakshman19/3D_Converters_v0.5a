@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { digestRigidOwnershipSnapshot } from '../converters/xml-cii2019-core/rigid-weight-snapshot.js';
+import { applyXmlCiiRigidWeightOverrides } from '../converters/xml-cii2019-core/weight-match-model.js';
 import { enforceStandaloneRigidSplitOwnership, enforceStandaloneFinalRigidWeightReview } from
   '../tabs/xml-cii-2019-standalone/xml-cii-final-rigid-weight-review-gate.js';
 import {
@@ -170,11 +171,24 @@ const persistent={
   overrides:{rigidWeight:savedWeights},
   rigidOwnership:{allocations:savedAllocations},
 };
+const nextPrepared = applyXmlCiiRigidWeightOverrides(highXml, savedWeights).xmlText;
+assert.equal(nextPrepared,corrected.xmlText,'reviewed corrected XML must be byte-stable on rerun');
+const expectedPersistedDigest = await digestRigidOwnershipSnapshot({
+ sourceId:correctedJob.sourceId,sourceName:correctedJob.sourceName,
+ sourceText:correctedJob.sourceText,stagedJsonText:correctedJob.stagedJsonText,
+ supportConfigJson:JSON.stringify(persistent),
+ branchSelection:null,options:correctedJob.options,preparedXmlText:nextPrepared,
+});
+assert.equal(expectedPersistedDigest,corrected.snapshotDigest,
+  'saved numeric overrides and ownership approval must produce the same snapshot SHA-256');
 const rerun=await enforceStandaloneFinalRigidWeightReview({
  xmlText:highXml,nodeRows:[],reviewProposals:[],
 },{...correctedJob,supportConfigJson:JSON.stringify(persistent)},{
- reviewSplitRigidOwnership:async()=>{
-   throw new Error('Same unchanged source with persisted approval must never re-prompt');
+ reviewSplitRigidOwnership:async(groups,meta)=>{
+   throw new Error('Unexpected stale approval: '+JSON.stringify({
+     expected:corrected.snapshotDigest,current:meta.snapshotDigest,
+     groups:groups.map(g=>({id:g.componentOccurrenceId,reason:g.reason,status:g.status})),
+   }));
  },
  reviewFinalRigidWeights:async()=>{
    throw new Error('Same corrected weight must remain within empirical approval');
