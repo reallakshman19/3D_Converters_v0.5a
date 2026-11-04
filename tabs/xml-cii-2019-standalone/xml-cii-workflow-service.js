@@ -162,6 +162,7 @@ export async function runXmlCii2019WorkflowService(job, runtime = {}) {
         ciiText: normalized.ciiText,
         rigidLedger: normalized.rigidLedger,
         kgToNewton: factedJob.options?.kgToNewton !== false,
+        componentLedger: finalReview.splitCustody?.componentLedger || [],
       });
       normalized.diagnostics.rigidPythonOwnershipReconciliation = verification;
     } catch (error) {
