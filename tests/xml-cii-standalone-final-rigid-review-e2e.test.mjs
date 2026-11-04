@@ -51,9 +51,10 @@ async function runWith(xml,options={}) {
         authority:'ACTUAL_PYTHON_MODEL_AND_EMITTED_CII',
         weightScale,ciiSha256:createHash('sha256').update(ciiText).digest('hex'),
         summary:{rigidAuxCount:1,positiveCount:ownerKg>0?1:0,zeroCount:ownerKg===0?1:0},
-        rows:[{rigidAuxIndex:1,branchName:'B-939',fromNode:939,toNode:10020,
+        rows:[{rigidAuxIndex:1,branchName:'B-939',branchOccurrence:0,fromNodeOccurrence:1,toNodeOccurrence:2,
+          fromNode:939,toNode:10020,fromComponentType:'PIPE',fromPosition:[89.9,0,0],
           toComponentType:'RIGID',toEndpoint:2,toPosition:[109,0,0],
-          componentRefNo:'=FLANGE-1',massKg:ownerKg,emittedCiiMass:emitted,
+          componentRefNo:'=FLANGE-1',massKg:ownerKg,expectedCiiMass:emitted,emittedCiiMass:emitted,
           weightState:ownerKg>0?'POSITIVE':'ZERO'}],
       };
       return {ok:true,sourceKind:'xml',outputKind:'enrichedXML',
