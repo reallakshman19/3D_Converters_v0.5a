@@ -184,7 +184,7 @@ const EXPRESSION=String.raw`(async()=>{
   }
   if(!outputButton)throw Error('Real Run did not yield enabled enriched XML download; '+last+
      '; status '+root.querySelector('[data-active-phase="run"]')?.textContent?.slice(-1400));
-  outputButton.click();steps.push('clicked actual Download Enriched XML');
+  steps.push('download enabled; CDP fresh user gesture will click actual Download Enriched XML');
   return{status:'PASS',scope:'real standalone workflow shell, clicked source/stage file import, phase navigation, Preview Build, Weight Match, Run, and download; masterContext is controlled fixture preloaded in memory',
     steps,preview,weight,readinessDisabled:readiness.disabled,popupSkipped,
     outputButtonLabel:outputButton.textContent?.trim(),
@@ -210,7 +210,28 @@ async function browserCapture(files){
     const origin='http://127.0.0.1:'+pagePort;
     const absolute=EXPRESSION.replaceAll("'/__glrd/", "'"+origin+"/__glrd/")
       .replaceAll("'/tabs/", "'"+origin+"/tabs/");
-    return await evaluate(ws,absolute,join(OUT,'downloads'))
+    const rendered=await evaluate(ws,absolute,join(OUT,'downloads'));
+    if(rendered?.status!=='PASS'||!rendered.renderedDownloadEnabled)
+      throw Error('Workflow did not render enabled Download Enriched XML control');
+    // CDP userGesture expires during the long async Preview/Run sequence. Trigger
+    // the real Download button with a NEW user gesture after Run completion.
+    const downloadExpression='(()=>{const btn=document.querySelector("#g3-standalone-workflow [data-action=\\"download-enriched\\"]");if(!btn||btn.disabled)throw Error("Download button unavailable");btn.click();return{clicked:true,label:btn.textContent?.trim()||""};})()';
+    const click=await evaluate(ws,downloadExpression,join(OUT,'downloads'));
+    if(!click?.clicked)throw Error('CDP user-gesture download button click not confirmed');
+    const downloadDir=join(OUT,'downloads');
+    let complete=false;
+    for(let attempt=0;attempt<120;attempt++){
+      const entries=await (await import('node:fs/promises')).readdir(downloadDir);
+      const finished=entries.filter(name=>/\.(xml|inputxml)$/i.test(name));
+      if(finished.length===1&&!entries.some(name=>name.endsWith('.crdownload'))){
+        const file=await readFile(join(downloadDir,finished[0]));
+        if(file.byteLength>1000){complete=true;break;}
+      }
+      await sleep(125);
+    }
+    if(!complete)throw Error('Actual browser click produced no completed downloaded XML before Chrome cleanup');
+    return {...rendered,actualDownloadClick:click};
+
   }catch(e){throw Error(String(e.message||e)+'; chrome stderr='+stderr.slice(-3000));}
   finally{
     chrome.kill('SIGKILL');
