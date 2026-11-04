@@ -45,7 +45,7 @@ async function runWith(xml,options={}) {
       const ownerKg = Number(owner?.getElementsByTagName('Weight')[0]?.textContent);
       const weightScale = job.options?.kgToNewton === false ? 1 : 10;
       const emitted = ownerKg * weightScale;
-      const ciiText = '#$ RIGID\\n' + emitted + ' 0\\n#$ EXPJT\\n';
+      const ciiText = '#$ RIGID\n' + emitted + ' 0\n#$ EXPJT\n';
       const rigidLedger = {
         schema:'xml-cii-rigid-python-emission-ledger/v1',
         authority:'ACTUAL_PYTHON_MODEL_AND_EMITTED_CII',
