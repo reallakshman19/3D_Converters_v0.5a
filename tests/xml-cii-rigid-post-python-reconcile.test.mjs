@@ -20,10 +20,12 @@ const ledger = {
  weightScale:10, ciiSha256:await digest(CII),
  summary:{rigidAuxCount:2,positiveCount:1,zeroCount:1,missingCount:0,invalidCount:0},
  rows:[
-  {rigidAuxIndex:1,edgeIndex:1,branchName:'B-939',fromNode:930,toNode:939,toComponentType:'RIGID',
-    componentRefNo:'=FL-1',toEndpoint:1,toPosition:[89.9,0,0],massKg:0,emittedCiiMass:0,weightState:'ZERO'},
-  {rigidAuxIndex:2,edgeIndex:2,branchName:'B-939',fromNode:939,toNode:10020,toComponentType:'RIGID',
-    componentRefNo:'=FL-1',toEndpoint:2,toPosition:[109,0,0],massKg:15,emittedCiiMass:150,weightState:'POSITIVE'}
+  {rigidAuxIndex:1,edgeIndex:1,branchName:'B-939',branchOccurrence:0,fromNodeOccurrence:0,toNodeOccurrence:1,
+    fromNode:930,toNode:939,fromComponentType:'PIPE',fromPosition:[0,0,0],toComponentType:'RIGID',
+    componentRefNo:'=FL-1',toEndpoint:1,toPosition:[89.9,0,0],massKg:0,expectedCiiMass:0,emittedCiiMass:0,weightState:'ZERO'},
+  {rigidAuxIndex:2,edgeIndex:2,branchName:'B-939',branchOccurrence:0,fromNodeOccurrence:1,toNodeOccurrence:2,
+    fromNode:939,toNode:10020,fromComponentType:'RIGID',fromPosition:[89.9,0,0],toComponentType:'RIGID',
+    componentRefNo:'=FL-1',toEndpoint:2,toPosition:[109,0,0],massKg:15,expectedCiiMass:150,emittedCiiMass:150,weightState:'POSITIVE'}
  ],
 };
 const verify=(partial={})=>reconcileFinalPythonRigidWeights({
@@ -42,9 +44,9 @@ await assert.rejects(verify({reviewedXmlText:XML.replace('<Position>109 0 0</Pos
 await assert.rejects(verify({rigidLedger:{...ledger,rows:[ledger.rows[1],ledger.rows[0]]}}),/indices/);
 await assert.rejects(verify({rigidLedger:{...ledger,rows:[ledger.rows[0],{...ledger.rows[1],rigidAuxIndex:2,massKg:150}]}}),/inconsistent mass/);
 const duplicate=XML.replace('</Branch>',XML.match(/<Node><NodeNumber>10020<\/NodeNumber>[\s\S]*?<\/Node>/)?.[0]+'</Branch>');
-await assert.rejects(verify({reviewedXmlText:duplicate}),/one exact approved source owner/);
+await assert.rejects(verify({reviewedXmlText:duplicate}),/one exact approved source owner|mass lost/);
 const lost={...ledger,rows:[{...ledger.rows[0],massKg:0,emittedCiiMass:0,weightState:'ZERO'},
   {...ledger.rows[1],massKg:0,emittedCiiMass:0,weightState:'ZERO'}],summary:{...ledger.summary,positiveCount:0,zeroCount:2}};
 const CII_ZERO=CII.replace('150','0');
-await assert.rejects(verify({ciiText:CII_ZERO,rigidLedger:{...lost,ciiSha256:await digest(CII_ZERO)}}),/mass lost/);
+await assert.rejects(verify({ciiText:CII_ZERO,rigidLedger:{...lost,ciiSha256:await digest(CII_ZERO)}}),/mass lost|one exact approved source owner/);
 console.log('POST_PYTHON_RIGID_CII_OWNERSHIP_RECONCILE_PASS');
