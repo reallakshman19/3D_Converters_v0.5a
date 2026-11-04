@@ -7,6 +7,7 @@ import { applyXmlCiiStagedGeometryAuthority } from '../../../converters/xml-cii2
 import { applyXmlCiiOutsideDiameterResolver } from '../../../converters/xml-cii2019-core/outside-diameter-resolver.js?v=20260708-od-resolver-1';
 import { applyXmlCiiSplitRigidWeightPropagation } from '../../../converters/xml-cii2019-core/split-rigid-weight-propagation.js?v=20260708-split-weight-1';
 import { digestRigidOwnershipSnapshot } from '../../../converters/xml-cii2019-core/rigid-weight-snapshot.js';
+import { reconcileFinalPythonRigidWeights } from '../../../converters/xml-cii2019-core/rigid-weight-post-python-reconcile.js';
 import { buildXmlCiiTopologyDisconnectAudit } from '../../../converters/xml-cii2019-core/topology/xml-cii-topology-disconnect-audit.js?v=20260708-topology-1';
 import { buildXmlCiiNodeResolverIndex } from '../../../converters/xml-cii2019-core/sideload-resolver.js';
 import { resolveManualRestraintRows } from '../../../converters/xml-cii2019-core/sideload-restraints.js';
@@ -32,6 +33,32 @@ function publishMatchedPreviewDiagnostics(payload) {
   try { window.localStorage?.setItem(MATCHED_PREVIEW_STORAGE_KEY, JSON.stringify(eventPayload)); } catch {}
   try { window.dispatchEvent(new CustomEvent(MATCHED_PREVIEW_EVENT, { detail: eventPayload })); } catch {}
 }
+/**
+ * Model Converters worker returns an array of files. Never release the CII
+ * until the actual contracted Python RIGID manifest reconciles with the
+ * effective final enriched XML that was submitted to that worker.
+ */
+export async function reconcileModelConvertersPythonRigidResponse(xmlText, response, options = {}) {
+  const outputs = Array.isArray(response?.outputs) ? response.outputs : [];
+  const cii = outputs.filter((item) => /\\.cii$/i.test(String(item?.name || '')));
+  const ledgerOutputs = outputs.filter((item) => /\\.rigid_ledger\\.json$/i.test(String(item?.name || '')));
+  if (cii.length !== 1 || ledgerOutputs.length !== 1
+      || typeof cii[0]?.text !== 'string' || !cii[0].text.trim()
+      || typeof ledgerOutputs[0]?.text !== 'string') {
+    throw new Error('Model Converters CII blocked: exactly one nonempty CII and Python RIGID custody ledger are required.');
+  }
+  let ledger;
+  try { ledger = JSON.parse(ledgerOutputs[0].text); }
+  catch { throw new Error('Model Converters CII blocked: Python RIGID ledger is not valid JSON.'); }
+  const verified = await reconcileFinalPythonRigidWeights({
+    reviewedXmlText: xmlText,
+    ciiText: cii[0].text,
+    rigidLedger: ledger,
+    kgToNewton: options.kgToNewton !== false,
+  });
+  return { verification: verified, ledger, cii: cii[0] };
+}
+
 function parseSupportConfig(options = {}) { try { const parsed = JSON.parse(options.supportConfigJson || '{}'); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; } }
 function text(value) { return value === undefined || value === null ? '' : String(value).trim(); }
 function mergeRuntimeOverridesIntoConfig(targetConfig, sourceConfig) {
@@ -206,7 +233,15 @@ export async function run(context) {
     if (!context.workerRunner) throw new Error('Python worker runtime is not available.');
     context.setStatus?.('Starting Python worker...', 'running');
     const serializableOptions = Object.fromEntries(Object.entries(runValues).filter(([, v]) => typeof v !== 'function'));
-    return await withTimeout(context.workerRunner.runJob({ converterId: context.converterId, inputFiles: context.inputFiles, options: serializableOptions }), 'Python worker conversion');
+    const directResponse = await withTimeout(context.workerRunner.runJob({ converterId: context.converterId, inputFiles: context.inputFiles, options: serializableOptions }), 'Python worker conversion');
+    const directVerified = await reconcileModelConvertersPythonRigidResponse(originalXmlText, directResponse, runValues);
+    return {
+      ...directResponse,
+      logs: { ...(directResponse.logs || {}), stdout: [
+        ...((directResponse.logs?.stdout || [])),
+        'Direct Python RIGID custody verified: ' + directVerified.verification.totalEdges + ' auxiliary edge(s).',
+      ] },
+    };
   }
 
   context.setStatus?.('Enriching XML before CII conversion...', 'running');
@@ -319,10 +354,17 @@ export async function run(context) {
   const serializableOptions = Object.fromEntries(Object.entries({ ...runValues, createEnrichedXml: false }).filter(([, v]) => typeof v !== 'function'));
   context.setStatus?.('Running CII conversion in Python worker...', 'running');
   const ciiResponse = await withTimeout(context.workerRunner.runJob({ converterId: context.converterId, inputFiles: [{ role: 'primary', name: enrichedName, bytes: encodeTextUtf8(enriched.xmlText) }], options: serializableOptions }), 'Python worker conversion');
+  // The worker's actual CII and Python RIGID ledger must reconcile against
+  // the exact XML bytes submitted, *after* sideload and temperature sanitizing.
+  const postPython = await reconcileModelConvertersPythonRigidResponse(enriched.xmlText, ciiResponse, runValues);
   const ciiOutputs = Array.isArray(ciiResponse.outputs) ? ciiResponse.outputs : [];
+  rigidReviewLogLines.push('Post-Python RIGID custody PASS: ' +
+    postPython.verification.totalEdges + ' auxiliary edge(s); ' +
+    postPython.verification.positiveEdges + ' positive source owner(s); ' +
+    postPython.verification.normalizedZeroEdges + ' normalized zero edge(s).');
   const stats = enriched.stats;
   const diagnostics = enriched.diagnostics;
-  const diagnosticPayload = { rigidOwnershipSnapshotDigest, splitRigidOwnershipLedger: enriched.splitRigidOwnershipLedger || [], generatedAt: new Date().toISOString(), source: 'latest-run', inputName: primary.name, enrichedName, enrichedStageName, topologyName, diagnosticsName: `${stem}_enrichment_diagnostics.json`, stats, diagnostics, matchedFacts: enriched.matchedFacts || [], rejectedFacts: enriched.rejectedFacts || [], topologyAudit };
+  const diagnosticPayload = { rigidPythonOwnershipReconciliation: postPython.verification, rigidOwnershipSnapshotDigest, splitRigidOwnershipLedger: enriched.splitRigidOwnershipLedger || [], generatedAt: new Date().toISOString(), source: 'latest-run', inputName: primary.name, enrichedName, enrichedStageName, topologyName, diagnosticsName: `${stem}_enrichment_diagnostics.json`, stats, diagnostics, matchedFacts: enriched.matchedFacts || [], rejectedFacts: enriched.rejectedFacts || [], topologyAudit };
   const enrichedStageText = JSON.stringify(buildEnrichedStageJson(enriched.xmlText, diagnosticPayload), null, 2);
   const topologyText = JSON.stringify(topologyAudit, null, 2);
   const rigidWeightAuditText = JSON.stringify({
