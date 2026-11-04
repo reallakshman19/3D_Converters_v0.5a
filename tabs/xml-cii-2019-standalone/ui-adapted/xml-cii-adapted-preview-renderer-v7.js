@@ -145,6 +145,8 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
   const isCurrent = () => isCurrentPreviewBuild(rootEl, host, generation);
   if (!isCurrent()) return;
   host.dataset.mcPreviewBuildCompleted = 'false';
+  // Clear a prior visit's rating before asynchronous resolution can yield.
+  discardPreviewCacheV7();
 
   const stagedSource = await resolveStagedSource(options, config);
   if (!isCurrent()) return;
@@ -179,12 +181,20 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
           stagedJsonText: result.stagedJsonText,
           config,
         });
-        // Crypto completion is asynchronous. Never publish an obsolete result.
-        if (!isBuildCurrent()) return;
-        captured = capturePreviewCacheV7(authority, undefined, undefined, result);
-        if (!captured.stored) reason = captured.reason;
       } catch (error) {
         reason = text(error?.message || error);
+      }
+      if (!isBuildCurrent()) return;
+      // An external completion callback must succeed before publication.
+      await options.onPreviewCommitted?.(result);
+      if (!isBuildCurrent()) return;
+      if (authority) {
+        try {
+          captured = capturePreviewCacheV7(authority, undefined, undefined, result);
+          if (!captured.stored) reason = captured.reason;
+        } catch (error) {
+          reason = text(error?.message || error);
+        }
       }
       if (!isBuildCurrent()) return;
       if (!captured) {
@@ -206,16 +216,12 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
         authority,
         reason,
       });
-      await options.onPreviewCommitted?.(result);
-      if (!isBuildCurrent()) return;
       host.dataset.mcPreviewBuildCompleted = 'true';
       committed = true;
     },
   };
 
-  // No displayed Preview is restored from persisted rows. Only explicit builds
-  // may publish new rows or a new authority-bound envelope.
-  discardPreviewCacheV7();
+  // The legacy renderer retains idle/manual behavior; no persisted rows restore.
   if (!isCurrent()) return;
   await buildLegacyPreview(rootEl, xmlText, config, delegatedOptions);
   if (!isCurrent() || committed) return;

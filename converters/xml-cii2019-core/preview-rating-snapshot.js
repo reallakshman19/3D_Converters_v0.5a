@@ -119,7 +119,12 @@ function displayedPreviewRows(root) {
   const rowElements = root.querySelectorAll(
     'table[data-resizable-table="branch-preview"] tbody tr.mc-preview-row, table.mc-preview-table tbody tr.mc-preview-row',
   );
-  return [...rowElements].map((rowElement) => {
+  // In-progress v7 rendering cannot publish uncommitted engineering values.
+  return [...rowElements].filter((rowElement) => {
+    const host = rowElement.closest?.('#mc-preview-table-host');
+    return host?.isConnected !== false
+      && host?.dataset?.mcPreviewBuildCompleted !== 'false';
+  }).map((rowElement) => {
     const branchCell = rowElement.querySelector?.('[data-mc-edit-type="branchLineKey"]');
     const branchName = text(branchCell?.dataset?.mcEditKey);
     const lineKey = displayText(branchCell?.querySelector?.('.mc-preview-editable-val')?.textContent);
@@ -159,40 +164,6 @@ function parseStored(value) {
   });
 }
 
-function readJsonStorage(key) {
-  if (typeof localStorage === 'undefined') return null;
-  try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
-}
-
-function snapshotFromPayload(payload, authorityDigest) {
-  const rows = payload?.data?.branchRows;
-  return Array.isArray(rows)
-    ? buildXmlCiiPreviewRatingSnapshot(rows, { authorityDigest })
-    : null;
-}
-
-function deterministicEnvelopeSnapshot() {
-  const envelope = readJsonStorage(XML_CII_PREVIEW_CACHE_ENVELOPE_KEY);
-  return snapshotFromPayload(
-    envelope?.legacyPayload,
-    text(envelope?.authority?.digest) || 'preview-cache-v8-envelope',
-  );
-}
-
-function bridgeSnapshot() {
-  return snapshotFromPayload(
-    readJsonStorage(XML_CII_PREVIEW_CACHE_BRIDGE_KEY),
-    'preview-cache-v8-bridge',
-  );
-}
-
-function legacySnapshot() {
-  return snapshotFromPayload(
-    readJsonStorage(XML_CII_LEGACY_PREVIEW_CACHE_KEY),
-    'legacy-preview-cache',
-  );
-}
-
 function setLiveSnapshot(snapshot) {
   try { globalThis[LIVE_SNAPSHOT_KEY] = snapshot; } catch {}
 }
@@ -203,13 +174,8 @@ function liveSnapshot() {
 
 export function publishXmlCiiPreviewRatingSnapshot(branchRows = [], metadata = {}) {
   const snapshot = buildXmlCiiPreviewRatingSnapshot(branchRows, metadata);
+  // A fresh build supplies the live snapshot; never persist it for reuse.
   setLiveSnapshot(snapshot);
-  if (typeof localStorage !== 'undefined') {
-    try {
-      localStorage.setItem(XML_CII_PREVIEW_RATING_SNAPSHOT_KEY, JSON.stringify(snapshot));
-      localStorage.removeItem(XML_CII_PREVIEW_RATING_SNAPSHOT_LEGACY_KEY);
-    } catch {}
-  }
   return snapshot;
 }
 
@@ -236,13 +202,8 @@ export function clearXmlCiiPreviewRatingSnapshot() {
 export function readXmlCiiPreviewRatingSnapshot() {
   const displayed = buildXmlCiiDisplayedPreviewRatingSnapshot();
   if (displayed.records.length) return displayed;
-  return liveSnapshot()
-    || parseStored(readJsonStorage(XML_CII_PREVIEW_RATING_SNAPSHOT_KEY))
-    || parseStored(readJsonStorage(XML_CII_PREVIEW_RATING_SNAPSHOT_LEGACY_KEY))
-    || deterministicEnvelopeSnapshot()
-    || bridgeSnapshot()
-    || legacySnapshot()
-    || buildXmlCiiPreviewRatingSnapshot([]);
+  // Persisted snapshots, envelopes and legacy bridges are not eligible.
+  return liveSnapshot() || buildXmlCiiPreviewRatingSnapshot([]);
 }
 
 function resultFromMatches(matches, source, snapshot) {

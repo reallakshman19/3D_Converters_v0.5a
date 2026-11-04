@@ -101,64 +101,25 @@ export async function createPreviewCacheAuthority({ xmlText = '', stagedJsonText
   };
 }
 
-function parseStored(raw) {
-  try {
-    const parsed = JSON.parse(raw || 'null');
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function validLegacyPayload(value) {
-  return !!(
-    value
-    && typeof value === 'object'
-    && typeof value.fp === 'string'
-    && value.data
-    && Array.isArray(value.data.branchRows)
-  );
-}
-
-export function restorePreviewCacheV7(authority, storage) {
-  const target = storageOrNull(storage);
-  if (!target || !authority?.digest) return { restored: false, reason: 'storage-or-authority-unavailable' };
-  const envelope = parseStored(target.getItem(XML_CII_PREVIEW_CACHE_KEY));
-  const exact = envelope?.schema === XML_CII_PREVIEW_CACHE_SCHEMA
-    && envelope?.authority?.digest === authority.digest
-    && validLegacyPayload(envelope?.legacyPayload);
-  try {
-    if (exact) {
-      target.setItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY, JSON.stringify(envelope.legacyPayload));
-      publishXmlCiiPreviewRatingSnapshot(envelope.legacyPayload.data.branchRows, {
-        authorityDigest: authority.digest,
-      });
-      return { restored: true, reason: 'exact-authority-match', envelope };
-    }
-    target.removeItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY);
-    clearXmlCiiPreviewRatingSnapshot();
-  } catch {}
-  return { restored: false, reason: envelope ? 'authority-mismatch' : 'cache-missing-or-invalid' };
+// Persisted engineering rows must never be restored as a new Preview.
+export function restorePreviewCacheV7(_authority, storage) {
+  clearPreviewCacheBridge(storage);
+  return { restored: false, reason: 'explicit-preview-build-required' };
 }
 
 export function capturePreviewCacheV7(authority, storage, maxBytes = DEFAULT_MAX_BYTES, committedResult = null) {
   const target = storageOrNull(storage);
   if (!authority?.digest) return { stored: false, reason: 'authority-unavailable' };
-  // An explicit build supplies its rows in memory. Existing legacy callers of
-  // this helper may still use the old storage input until they are migrated.
-  const direct = Array.isArray(committedResult?.branchRows);
-  const legacyPayload = direct ? {
+  // Only directly committed rows may be published or optionally persisted.
+  // In particular, never read the old temporary storage bridge.
+  if (!Array.isArray(committedResult?.branchRows)) {
+    return { stored: false, reason: 'explicit-preview-result-required' };
+  }
+  const legacyPayload = {
     fp: 'explicit-preview-build-v1-not-a-reuse-key',
     data: { branchRows: committedResult.branchRows, nodeRows: committedResult.nodeRows },
     ts: Date.now(),
-  } : (target ? parseStored(target.getItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY)) : null);
-  if (!direct) {
-    try { target?.removeItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY); } catch {}
-  }
-  if (!validLegacyPayload(legacyPayload)) {
-    clearXmlCiiPreviewRatingSnapshot();
-    return { stored: false, reason: 'legacy-payload-missing-or-invalid' };
-  }
+  };
 
   publishXmlCiiPreviewRatingSnapshot(legacyPayload.data.branchRows, {
     authorityDigest: authority.digest,

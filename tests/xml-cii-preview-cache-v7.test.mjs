@@ -77,24 +77,29 @@ test('override changes beyond the former 300-character truncation invalidate aut
   assert.notEqual(left.digest, right.digest);
 });
 
-test('legacy cache payload is released only for an exact v7 authority match', async () => {
+test('persisted Preview rows never restore without a fresh explicit build', async () => {
   const storage = new MemoryStorage();
-  const authority150 = await createPreviewCacheAuthority({ xmlText: '<Rating>150</Rating>', config: {} });
-  const authority900 = await createPreviewCacheAuthority({ xmlText: '<Rating>900</Rating>', config: {} });
+  const authority = await createPreviewCacheAuthority({ xmlText: '<Rating>150</Rating>', config: {} });
 
   storage.setItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY, JSON.stringify(legacyPayload('150')));
-  const captured = capturePreviewCacheV7(authority150, storage);
-  assert.equal(captured.stored, true);
-  assert.equal(storage.getItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY), null, 'legacy bridge must be ephemeral');
-  assert.ok(storage.getItem(XML_CII_PREVIEW_CACHE_KEY));
+  const fromBridge = capturePreviewCacheV7(authority, storage);
+  assert.equal(fromBridge.stored, false);
+  assert.equal(fromBridge.reason, 'explicit-preview-result-required');
 
-  const mismatch = restorePreviewCacheV7(authority900, storage);
-  assert.equal(mismatch.restored, false);
+  storage.setItem(XML_CII_PREVIEW_CACHE_KEY, JSON.stringify({
+    schema: 'xml-cii-preview-cache/v8-rating-policy',
+    authority,
+    legacyPayload: legacyPayload('150'),
+  }));
+  assert.equal(restorePreviewCacheV7(authority, storage).restored, false);
   assert.equal(storage.getItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY), null);
 
-  const exact = restorePreviewCacheV7(authority150, storage);
-  assert.equal(exact.restored, true);
-  assert.deepEqual(JSON.parse(storage.getItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY)), legacyPayload('150'));
+  const fresh = capturePreviewCacheV7(authority, storage, undefined, {
+    branchRows: [{ branchName: '/A/B1', rating: '900' }], nodeRows: [],
+  });
+  assert.equal(fresh.stored, true);
+  assert.equal(JSON.parse(storage.getItem(XML_CII_PREVIEW_CACHE_KEY)).legacyPayload.data.branchRows[0].rating, '900');
+  assert.equal(restorePreviewCacheV7(authority, storage).restored, false);
 });
 
 test('phase routing and internal rebuild capture use the cache v7 boundary', () => {

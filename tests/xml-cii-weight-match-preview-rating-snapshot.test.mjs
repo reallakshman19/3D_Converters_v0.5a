@@ -128,7 +128,7 @@ test('live Preview publication outranks an older deterministic envelope', () => 
   }
 });
 
-test('deterministic Preview cache envelope remains a fallback authority', () => {
+test('persisted Preview cache envelope never supplies current Weight Match Rating', () => {
   const previousStorage = globalThis.localStorage;
   const values = new Map();
   globalThis.localStorage = {
@@ -153,8 +153,8 @@ test('deterministic Preview cache envelope remains a fallback authority', () => 
       },
     }));
     const snapshot = readXmlCiiPreviewRatingSnapshot();
-    assert.equal(snapshot.authorityDigest, 'sha256:preview-900');
-    assert.equal(resolveXmlCiiPreviewRating({ branchName: '/E/B1' }, snapshot).rating, '900');
+    assert.equal(snapshot.records.length, 0);
+    assert.equal(resolveXmlCiiPreviewRating({ branchName: '/E/B1' }, snapshot).rating, '');
   } finally {
     clearXmlCiiPreviewRatingSnapshot();
     if (previousStorage === undefined) delete globalThis.localStorage;
