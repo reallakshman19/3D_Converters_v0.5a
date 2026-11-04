@@ -4,15 +4,13 @@ import {
 } from './xml-cii-adapted-preview-renderer.js';
 import {
   XML_CII_PREVIEW_CACHE_SCHEMA,
-  XML_CII_PREVIEW_LEGACY_CACHE_KEY,
   capturePreviewCacheV7,
-  clearPreviewCacheBridge,
   createPreviewCacheAuthority,
   discardPreviewCacheV7,
-  restorePreviewCacheV7,
   shortPreviewCacheDigest,
 } from './xml-cii-adapted-preview-cache-v7.js';
 import { applyPreviewDtxrRatingOverrides } from './xml-cii-adapted-preview-rating-fetch.js';
+import { publishXmlCiiPreviewRatingSnapshot } from '../../../converters/xml-cii2019-core/preview-rating-snapshot.js';
 
 export { xmlCiiRenderPreviewPhase };
 
@@ -44,25 +42,6 @@ async function resolveStagedSource(options, config) {
     text: text(options?.stagedJsonText),
     label: text(options?.stagedSourceLabel),
   };
-}
-
-function previewRendered(host) {
-  return !!host?.querySelector?.('table, [data-mc-edit-type], .mc-preview-editable-val');
-}
-
-function readLegacyPayload() {
-  try {
-    const value = typeof localStorage !== 'undefined'
-      ? JSON.parse(localStorage.getItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY) || 'null')
-      : null;
-    return value && Array.isArray(value?.data?.branchRows) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function legacyBridgePresent() {
-  return Boolean(readLegacyPayload());
 }
 
 function addNotice(host, message, bad = false) {
@@ -135,124 +114,82 @@ function addCacheEvidence(host, { status, authority, reason = '' } = {}) {
   );
 }
 
-function installInternalRebuildCapture(host, rootEl, xmlText, config, options) {
-  if (!host || typeof MutationObserver === 'undefined') return;
-  host.__xmlCiiPreviewCacheV7Observer?.disconnect?.();
-  let timer = null;
-  let running = false;
-  const observer = new MutationObserver(() => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(async () => {
-      timer = null;
-      if (running || !previewRendered(host) || !legacyBridgePresent()) return;
-      running = true;
-      try {
-        const legacy = readLegacyPayload();
-        installDtxrRatingAction({
-          host,
-          rootEl,
-          xmlText,
-          config,
-          options,
-          branchRows: legacy?.data?.branchRows || [],
-        });
-        const stagedSource = await resolveStagedSource(options, config);
-        const authority = await createPreviewCacheAuthority({
-          xmlText,
-          stagedJsonText: stagedSource.text,
-          config,
-        });
-        const captured = capturePreviewCacheV7(authority);
-        addCacheEvidence(host, {
-          status: captured.stored ? 'REBUILT' : 'UNCACHED',
-          authority,
-          reason: captured.stored ? '' : captured.reason,
-        });
-      } catch (error) {
-        clearPreviewCacheBridge();
-        addCacheEvidence(host, {
-          status: 'UNCACHED',
-          authority: null,
-          reason: text(error?.message || error),
-        });
-      } finally {
-        running = false;
-      }
-    }, 0);
-  });
-  observer.observe(host, { childList: true, subtree: true });
-  host.__xmlCiiPreviewCacheV7Observer = observer;
-}
-
+// The legacy renderer owns all Build/Rebuild buttons. Its delegated options
+// retain this callback so manual and internal rebuilds reach the v7 wrapper.
 export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, options = {}) {
   const host = rootEl?.querySelector?.('#mc-preview-table-host');
   if (!host) return;
-  installInternalRebuildCapture(host, rootEl, xmlText, config, options);
 
   const stagedSource = await resolveStagedSource(options, config);
+  let committed = false;
   const delegatedOptions = {
     ...options,
     stagedJsonText: stagedSource.text,
     stagedSourceLabel: stagedSource.label,
-    resolveStagedJsonText: async () => stagedSource,
+    // Resolve afresh for manual builds; the initial idle source may have changed.
+    resolveStagedJsonText: (currentConfig) => resolveStagedSource(options, currentConfig),
+    onPreviewCommitted: async (result) => {
+      const currentHost = rootEl?.querySelector?.('#mc-preview-table-host');
+      if (!currentHost || !Array.isArray(result?.branchRows)) return;
+      committed = true;
+      currentHost.dataset.mcPreviewBuildCompleted = 'true';
+
+      installDtxrRatingAction({
+        host: currentHost,
+        rootEl,
+        xmlText,
+        config,
+        options,
+        branchRows: result.branchRows,
+      });
+
+      let authority = null;
+      let captured = null;
+      let reason = '';
+      try {
+        authority = await createPreviewCacheAuthority({
+          xmlText,
+          // Exact staged text used by the calculation, not a later re-read.
+          stagedJsonText: result.stagedJsonText,
+          config,
+        });
+        captured = capturePreviewCacheV7(authority, undefined, undefined, result);
+        if (!captured.stored) reason = captured.reason;
+      } catch (error) {
+        reason = text(error?.message || error);
+      }
+      if (!captured) {
+        // A missing SHA-256 implementation must not suppress live Weight Match data.
+        publishXmlCiiPreviewRatingSnapshot(result.branchRows, {
+          authorityDigest: authority?.digest || 'explicit-preview-build',
+        });
+      }
+      addCacheEvidence(currentHost, {
+        status: captured?.stored ? 'REBUILT' : 'UNCACHED',
+        authority,
+        reason,
+      });
+      await options.onPreviewCommitted?.(result);
+    },
   };
 
+  // No displayed Preview is restored from persisted rows. Only explicit builds
+  // may publish new rows or a new authority-bound envelope.
+  discardPreviewCacheV7();
+  host.dataset.mcPreviewBuildCompleted = 'false';
+  await buildLegacyPreview(rootEl, xmlText, config, delegatedOptions);
+  if (committed) return;
+
   let authority = null;
-  let restored = { restored: false, reason: 'not-attempted' };
-  let digestError = null;
+  let reason = 'explicit Build/Rebuild required';
   try {
     authority = await createPreviewCacheAuthority({
       xmlText,
       stagedJsonText: stagedSource.text,
       config,
     });
-    if (options.forceBuild === true) clearPreviewCacheBridge();
-    else restored = restorePreviewCacheV7(authority);
   } catch (error) {
-    digestError = error;
-    clearPreviewCacheBridge();
+    reason = text(error?.message || error);
   }
-
-  await buildLegacyPreview(rootEl, xmlText, config, delegatedOptions);
-
-  const rendered = previewRendered(host);
-  if (!authority) {
-    clearPreviewCacheBridge();
-    addCacheEvidence(host, {
-      status: rendered ? 'UNCACHED' : 'DISABLED',
-      authority,
-      reason: text(digestError?.message || digestError),
-    });
-    return;
-  }
-
-  if (!rendered) {
-    if (restored.restored) discardPreviewCacheV7();
-    else clearPreviewCacheBridge();
-    addCacheEvidence(host, {
-      status: 'MISS',
-      authority,
-      reason: restored.restored ? 'legacy fingerprint rejected; rebuild required' : restored.reason,
-    });
-    return;
-  }
-
-  const legacy = readLegacyPayload();
-  installDtxrRatingAction({
-    host,
-    rootEl,
-    xmlText,
-    config,
-    options,
-    branchRows: legacy?.data?.branchRows || [],
-  });
-  const captured = capturePreviewCacheV7(authority);
-  const status = options.forceBuild === true
-    ? (captured.stored ? 'REBUILT' : 'UNCACHED')
-    : (restored.restored ? 'HIT' : (captured.stored ? 'REBUILT' : 'UNCACHED'));
-  addCacheEvidence(host, {
-    status,
-    authority,
-    reason: captured.stored ? '' : captured.reason,
-  });
+  addCacheEvidence(host, { status: 'MISS', authority, reason });
 }

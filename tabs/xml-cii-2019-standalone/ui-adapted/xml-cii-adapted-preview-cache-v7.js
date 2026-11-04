@@ -141,11 +141,20 @@ export function restorePreviewCacheV7(authority, storage) {
   return { restored: false, reason: envelope ? 'authority-mismatch' : 'cache-missing-or-invalid' };
 }
 
-export function capturePreviewCacheV7(authority, storage, maxBytes = DEFAULT_MAX_BYTES) {
+export function capturePreviewCacheV7(authority, storage, maxBytes = DEFAULT_MAX_BYTES, committedResult = null) {
   const target = storageOrNull(storage);
-  if (!target || !authority?.digest) return { stored: false, reason: 'storage-or-authority-unavailable' };
-  const legacyPayload = parseStored(target.getItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY));
-  try { target.removeItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY); } catch {}
+  if (!authority?.digest) return { stored: false, reason: 'authority-unavailable' };
+  // An explicit build supplies its rows in memory. Existing legacy callers of
+  // this helper may still use the old storage input until they are migrated.
+  const direct = Array.isArray(committedResult?.branchRows);
+  const legacyPayload = direct ? {
+    fp: 'explicit-preview-build-v1-not-a-reuse-key',
+    data: { branchRows: committedResult.branchRows, nodeRows: committedResult.nodeRows },
+    ts: Date.now(),
+  } : (target ? parseStored(target.getItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY)) : null);
+  if (!direct) {
+    try { target?.removeItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY); } catch {}
+  }
   if (!validLegacyPayload(legacyPayload)) {
     clearXmlCiiPreviewRatingSnapshot();
     return { stored: false, reason: 'legacy-payload-missing-or-invalid' };
@@ -154,6 +163,7 @@ export function capturePreviewCacheV7(authority, storage, maxBytes = DEFAULT_MAX
   publishXmlCiiPreviewRatingSnapshot(legacyPayload.data.branchRows, {
     authorityDigest: authority.digest,
   });
+  if (!target) return { stored: false, reason: 'storage-unavailable' };
   const envelope = {
     schema: XML_CII_PREVIEW_CACHE_SCHEMA,
     authority,
@@ -170,14 +180,14 @@ export function capturePreviewCacheV7(authority, storage, maxBytes = DEFAULT_MAX
     for (const key of OLD_ENVELOPE_KEYS) target.removeItem(key);
     return { stored: true, reason: 'stored', bytes: serialized.length, envelope };
   } catch (error) {
+    try { target.removeItem(XML_CII_PREVIEW_CACHE_KEY); } catch {}
     return { stored: false, reason: 'storage-write-failed', error };
   }
 }
 
 export function clearPreviewCacheBridge(storage) {
   const target = storageOrNull(storage);
-  if (!target) return;
-  for (const key of LEGACY_KEYS) {
+  if (target) for (const key of LEGACY_KEYS) {
     try { target.removeItem(key); } catch {}
   }
   clearXmlCiiPreviewRatingSnapshot();
@@ -185,8 +195,7 @@ export function clearPreviewCacheBridge(storage) {
 
 export function clearPreviewCachesV7(storage) {
   const target = storageOrNull(storage);
-  if (!target) return;
-  for (const key of [
+  if (target) for (const key of [
     XML_CII_PREVIEW_CACHE_KEY,
     ...OLD_ENVELOPE_KEYS,
     ...LEGACY_KEYS,
@@ -200,8 +209,7 @@ export function clearPreviewCachesV7(storage) {
 
 export function discardPreviewCacheV7(storage) {
   const target = storageOrNull(storage);
-  if (!target) return;
-  try { target.removeItem(XML_CII_PREVIEW_CACHE_KEY); } catch {}
+  try { target?.removeItem(XML_CII_PREVIEW_CACHE_KEY); } catch {}
   clearPreviewCacheBridge(target);
 }
 

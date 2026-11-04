@@ -15,30 +15,6 @@ import {
   xmlCiiDryRunPreview
 } from './xml-cii-adapted-preview-dryrun.js';
 
-// Temporary handoff for the standalone v7 SHA-256 Preview authority. This is
-// NOT an eligible cache-read path: old incomplete-fingerprint entries are never
-// consulted to render engineering values. The v7 wrapper captures and removes
-// this explicit-build payload, then publishes its fully keyed envelope.
-const PREVIEW_V7_BRIDGE_KEY = 'xml-cii-pv-cache-v8-dtxr';
-const PREVIEW_V7_BRIDGE_MAX_BYTES = 2500000;
-
-function publishExplicitPreviewBridge(branchRows, nodeRows) {
-  try {
-    const serialized = JSON.stringify({
-      fp: 'explicit-preview-build-v1-not-a-reuse-key',
-      data: { branchRows, nodeRows },
-      ts: Date.now(),
-    });
-    if (serialized.length <= PREVIEW_V7_BRIDGE_MAX_BYTES) {
-      localStorage.setItem(PREVIEW_V7_BRIDGE_KEY, serialized);
-    } else {
-      localStorage.removeItem(PREVIEW_V7_BRIDGE_KEY);
-    }
-  } catch {
-    try { localStorage.removeItem(PREVIEW_V7_BRIDGE_KEY); } catch {}
-  }
-}
-
 function _overrideSource(overrides, bucket, key) {
   return _hasOwn(overrides?.[bucket], key) ? 'override' : 'auto';
 }
@@ -418,10 +394,8 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
   if (stagedSource.label) host.insertAdjacentHTML('afterbegin', `<div class="model-converters-workflow-detail-note" style="margin:0 0 8px;border-color:#2b6cb0;color:#1e3a8a;background:#eff6ff;">DTXR staged source: ${_esc(stagedSource.label)}</div>`);
   if (defaultRows.length) host.insertAdjacentHTML('afterbegin', `<div class="model-converters-workflow-detail-note" style="margin:0 0 8px;border-color:#7f1d1d;color:#7f1d1d;background:#fff7f7;">${defaultRows.length} line${defaultRows.length === 1 ? '' : 's'} use config defaults. Default values are shown in dark red.</div>`);
 
-  // The v7 wrapper and its internal-rebuild observer require this transient
-  // successful-build handoff to preserve rating snapshots and DTXR actions.
-  publishExplicitPreviewBridge(branchRows, nodeRows);
-
   table.bind(host);
   _bindDtxrWallUpdateButton({ host, branchRows, config, ensureOverrides, onSaveConfig, stagedSourceLabel: stagedSource.label });
+  // Notify the caller only after the calculated Preview has rendered and bound its actions.
+  await options.onPreviewCommitted?.({ branchRows, nodeRows, stagedJsonText: stagedSource.text, stagedSourceLabel: stagedSource.label });
 }
