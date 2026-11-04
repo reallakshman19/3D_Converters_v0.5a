@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { JSDOM } from 'jsdom';
 import { runXmlCii2019Workflow } from '../tabs/xml-cii-2019-standalone/xml-cii-workflow-api-atta-default.js';
 import { mappedNodeWeights } from '../tabs/xml-cii-2019-standalone/xml-cii-standalone-run-parity.js';
@@ -38,9 +39,27 @@ async function runWith(xml,options={}) {
     engineRunner:async (job)=>{
       captured.engineCalls+=1;
       captured.engineXml=job.sourceText;
+      const xmlDoc = new DOMParser().parseFromString(job.sourceText, 'application/xml');
+      const owner = [...xmlDoc.getElementsByTagName('Node')].find((n)=>
+        n.getElementsByTagName('NodeNumber')[0]?.textContent==='10020');
+      const ownerKg = Number(owner?.getElementsByTagName('Weight')[0]?.textContent);
+      const weightScale = job.options?.kgToNewton === false ? 1 : 10;
+      const emitted = ownerKg * weightScale;
+      const ciiText = '#$ RIGID\\n' + emitted + ' 0\\n#$ EXPJT\\n';
+      const rigidLedger = {
+        schema:'xml-cii-rigid-python-emission-ledger/v1',
+        authority:'ACTUAL_PYTHON_MODEL_AND_EMITTED_CII',
+        weightScale,ciiSha256:createHash('sha256').update(ciiText).digest('hex'),
+        summary:{rigidAuxCount:1,positiveCount:ownerKg>0?1:0,zeroCount:ownerKg===0?1:0},
+        rows:[{rigidAuxIndex:1,branchName:'B-939',fromNode:939,toNode:10020,
+          toComponentType:'RIGID',toEndpoint:2,toPosition:[109,0,0],
+          componentRefNo:'=FLANGE-1',massKg:ownerKg,emittedCiiMass:emitted,
+          weightState:ownerKg>0?'POSITIVE':'ZERO'}],
+      };
       return {ok:true,sourceKind:'xml',outputKind:'enrichedXML',
         enrichedText:job.sourceText,enrichedName:'enriched.xml',
-        ciiText:'CII_ENGINE_CALLED',ciiName:'model.cii',logs:[],diagnostics:{}};
+        ciiText,ciiName:'model.cii',rigidLedger,rigidLedgerText:JSON.stringify(rigidLedger),
+        logs:[],diagnostics:{}};
     },
   };
   if(options.dialog) runtime.reviewFinalRigidWeights=async(rows,meta)=>{
