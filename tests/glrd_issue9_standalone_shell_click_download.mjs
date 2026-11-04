@@ -194,6 +194,29 @@ const EXPRESSION=String.raw`(async()=>{
   const runButton=await wait(()=>root.querySelector('[data-action="run"]'),'Run conversion button');
   const readiness={disabled:runButton.disabled,details:root.querySelector('[data-active-phase="run"]')?.textContent?.slice(-1800)||''};
   if(runButton.disabled)throw Error('Real Run button blocked by UI readiness: '+readiness.details);
+  // Record the actual job produced by the live standalone UI adapter BEFORE Run.
+  // The previous 820150-byte service oracle used fewer option fields and is
+  // NOT automatically a byte-exact reference for the UI's enabled defaults.
+  const jobBuilder=await import('/tabs/xml-cii-2019-standalone/xml-cii-workflow-ui-adapter.js');
+  const activeState=shell.createStateRef().current;
+  const effectiveJob=await jobBuilder.buildXmlCiiWorkflowJobFromUiState(activeState);
+  const digest=async value=>{
+    const bytes=new TextEncoder().encode(String(value));
+    const hash=new Uint8Array(await crypto.subtle.digest('SHA-256',bytes));
+    return [...hash].map(n=>n.toString(16).padStart(2,'0')).join('');
+  };
+  const effectiveJobAuthority={
+    sourceKind:effectiveJob.sourceKind,sourceName:effectiveJob.sourceName,
+    sourceSha256:await digest(effectiveJob.sourceText),
+    stagedSha256:await digest(effectiveJob.stagedJsonText),
+    configSha256:await digest(effectiveJob.supportConfigJson),
+    optionSha256:await digest(JSON.stringify(effectiveJob.options)),
+    options:effectiveJob.options,
+    previewFactCount:effectiveJob.previewFacts?.length||0,
+    manualFactCount:effectiveJob.manualFacts?.length||0,
+    weightOverrideKeys:Object.keys(effectiveJob.weightOverrides||{}).length,
+    branchSelection:effectiveJob.branchSelection,
+  };
   runButton.click();steps.push('clicked actual Finalise and Run');
   let popupSkipped=0,outputButton=null;
   const started=performance.now();let last='';
@@ -214,7 +237,7 @@ const EXPRESSION=String.raw`(async()=>{
     outputButtonLabel:outputButton.textContent?.trim(),
     renderedDownloadEnabled:true,
     cacheSnapshotStored:!!localStorage.getItem('xml-cii-pv-cache-v8-rating-policy'),
-    sourceBytes:xml.length,stagedBytes:stage.length};
+    sourceBytes:xml.length,stagedBytes:stage.length,effectiveJobAuthority};
 })()`;
 async function browserCapture(files){
   const server=serveSource(files);
