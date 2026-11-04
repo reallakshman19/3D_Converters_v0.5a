@@ -40,8 +40,8 @@ function publishMatchedPreviewDiagnostics(payload) {
  */
 export async function reconcileModelConvertersPythonRigidResponse(xmlText, response, options = {}) {
   const outputs = Array.isArray(response?.outputs) ? response.outputs : [];
-  const cii = outputs.filter((item) => /\\.cii$/i.test(String(item?.name || '')));
-  const ledgerOutputs = outputs.filter((item) => /\\.rigid_ledger\\.json$/i.test(String(item?.name || '')));
+  const cii = outputs.filter((item) => /\.cii$/i.test(String(item?.name || '')));
+  const ledgerOutputs = outputs.filter((item) => /\.rigid_ledger\.json$/i.test(String(item?.name || '')));
   if (cii.length !== 1 || ledgerOutputs.length !== 1
       || typeof cii[0]?.text !== 'string' || !cii[0].text.trim()
       || typeof ledgerOutputs[0]?.text !== 'string') {
