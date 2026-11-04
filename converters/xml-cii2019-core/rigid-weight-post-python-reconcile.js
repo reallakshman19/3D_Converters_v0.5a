@@ -82,12 +82,69 @@ function rigidSectionNumbers(ciiText) {
 }
 
 /**
+ * Physical component conservation is distinct from checking individual
+ * positive owner nodes. In particular a distributed split can carry 5+10 kg
+ * in two XML nodes, while Python exports only the 10 kg receiving edge.
+ * That is a 5 kg loss even when every individual emitted edge is valid.
+ *
+ * Ledger must come from the exact snapshot-bound engineer approval gate.
+ */
+export function reconcileApprovedRigidComponentMasses(componentLedger, rigidLedger) {
+  if (!Array.isArray(componentLedger) || !Array.isArray(rigidLedger?.rows)) {
+    throw new Error('Final engineer-approved component ledger and Python RIGID edges are required.');
+  }
+  let approvedGroups = 0;
+  let massKg = 0;
+  let emittedMassKg = 0;
+  for (const group of componentLedger) {
+    if (!group || !Array.isArray(group.nodes) || group.nodes.length < 2) {
+      throw new Error('Invalid RIGID split occurrence in final engineer approval ledger.');
+    }
+    const positives = Number(group.positiveNodes || 0);
+    if (!Number.isInteger(positives) || positives < 0) {
+      throw new Error('Invalid split positive-node count in physical custody.');
+    }
+    if (positives === 0 && group.status === 'NO_POSITIVE_MASS') continue;
+    if (group.status !== 'VALIDATED' ||
+        !['COMPONENT_LUMPED', 'SEGMENT_DISTRIBUTED', 'ZERO_NONOWNER'].includes(group.allocationType)) {
+      throw new Error('Positive RIGID split has no validated engineer physical allocation: ' + group.componentOccurrenceId);
+    }
+    const declared = Number(group.authorizedComponentMassKg);
+    if (!Number.isFinite(declared) || declared < 0) {
+      throw new Error('Invalid authorized RIGID component mass: ' + group.componentOccurrenceId);
+    }
+    const nodeOrdinals = new Set(group.nodes.map((node) => Number(node.nodeOrdinal)));
+    if (nodeOrdinals.size !== group.nodes.length) {
+      throw new Error('Duplicate child source occurrence in engineer RIGID allocation.');
+    }
+    const emissions = rigidLedger.rows.filter((row) =>
+      Number(row.branchOccurrence) === Number(group.branchOrdinal)
+      && ref(row.componentRefNo) === ref(group.componentRefNo)
+      && nodeOrdinals.has(Number(row.toNodeOccurrence)));
+    const actualMass = emissions.reduce((sum, row) => sum + Number(row.massKg), 0);
+    if (!Number.isFinite(actualMass) ||
+      Math.abs(actualMass - declared) > Math.max(1e-8, Math.abs(declared) * 1e-9)) {
+      throw new Error('Python CII RIGID lost or duplicated approved physical component mass: ' +
+        group.componentOccurrenceId + ' (approved ' + declared + ' kg, emitted ' + actualMass + ' kg).');
+    }
+    approvedGroups++;
+    massKg += declared;
+    emittedMassKg += actualMass;
+  }
+  return {
+    schema: 'rigid-approved-component-export-conservation/v1',
+    approvedGroups, authorizedMassKg: massKg, emittedMassKg,
+  };
+}
+
+/**
  * Verify that every emitted RIGID auxiliary is byte-consistent and any
  * positive owner is uniquely traceable to the exact reviewed enriched XML.
  * No inferred owner, segment allocation or empirical estimate is accepted.
  */
 export async function reconcileFinalPythonRigidWeights({
   reviewedXmlText, ciiText, rigidLedger, kgToNewton = true,
+  componentLedger = null,
 }) {
   if (!text(reviewedXmlText) || !text(ciiText)) {
     throw new Error('Approved XML and emitted CII are both required for RIGID reconciliation.');
@@ -192,7 +249,10 @@ export async function reconcileFinalPythonRigidWeights({
       || rigidLedger.summary?.zeroCount !== zeroEdges) {
     throw new Error('Python RIGID manifest summary does not agree with emitted edge census.');
   }
+  const conservation = componentLedger === null
+    ? null : reconcileApprovedRigidComponentMasses(componentLedger, rigidLedger);
   return { ok: true, schema: 'rigid-custody-post-python-reconciliation/v1',
     ciiSha256: actualCiiSha, totalEdges: rigidLedger.rows.length,
-    positiveEdges, zeroEdges, normalizedZeroEdges, sourceOwnersReconciled: matchedPositives.size };
+    positiveEdges, zeroEdges, normalizedZeroEdges, sourceOwnersReconciled: matchedPositives.size,
+    componentConservation: conservation };
 }
