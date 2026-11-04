@@ -254,7 +254,24 @@ async function browserCapture(files){
       }
       await sleep(125);
     }
-    if(!complete)throw Error('Actual browser click produced no completed downloaded XML before Chrome cleanup; Browser CDP events='+JSON.stringify(downloads.events));
+    if(!complete){
+      // Some Chrome runner installations ignore requested downloadPath and
+      // save into the profile's default Downloads directory. CDP's completed
+      // Browser.downloadProgress.filePath is the authoritative actual file.
+      const completed=downloads.events.filter(e=>e.method==='Browser.downloadProgress'
+        &&e.params?.state==='completed'&&typeof e.params?.filePath==='string');
+      const event=completed.at(-1);
+      const filePath=event?.params?.filePath||'';
+      if(filePath&&!filePath.includes('..')&&/\.xml$/i.test(filePath)){
+        const downloaded=await readFile(filePath);
+        if(downloaded.byteLength>1000){
+          const name=filePath.split(/[\\/]/).at(-1);
+          await writeFile(join(downloadDir,name),downloaded);
+          complete=true;
+        }
+      }
+    }
+    if(!complete)throw Error('Actual browser click produced no completed downloaded XML; Browser CDP events='+JSON.stringify(downloads.events));
     try { downloads.socket.close(); } catch {}
     return {...rendered,actualDownloadClick:click,downloadEvents:downloads.events.slice(-8)};
 
