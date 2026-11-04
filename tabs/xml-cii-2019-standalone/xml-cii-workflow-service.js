@@ -148,6 +148,13 @@ export async function runXmlCii2019WorkflowService(job, runtime = {}) {
   const result = await runXmlCii2019StandaloneEngineJob(engineJob, runtime);
   if (Array.isArray(result?.logs) && parity.logs.length) result.logs = [...parity.logs, ...result.logs];
   const normalized = normalizeXmlEngineResult(result);
+  const ciiRequired = ['cii-only', 'both'].includes(factedJob.options?.outputMode);
+  if (normalized.ok && ciiRequired && !normalized.ciiText) {
+    return blockedRunParityResult(factedJob, {
+      ...parity,
+      error: 'Post-Python RIGID custody blocked: CII export was requested, but the engine returned no CII to reconcile.',
+    });
+  }
   if (normalized.ok && normalized.ciiText) {
     try {
       const verification = await reconcileFinalPythonRigidWeights({
