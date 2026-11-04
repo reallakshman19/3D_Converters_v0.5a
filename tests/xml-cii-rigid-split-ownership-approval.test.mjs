@@ -191,14 +191,10 @@ const withOverrideInSource=await digestRigidOwnershipSnapshot({
  supportConfigJson:'{}',
  branchSelection:null,options:correctedJob.options,preparedXmlText:nextPrepared,
 });
-console.log('RIGID_SNAPSHOT_DEBUG', JSON.stringify({
- corrected: corrected.snapshotDigest,
- persisted: expectedPersistedDigest,
- withoutAllocations: withoutAllocationsDigest,
- noOverrides: withOverrideInSource,
- savedWeights, savedAllocations:Object.keys(savedAllocations),
- samePrepared: nextPrepared===corrected.xmlText,
-}));
+assert.equal(withoutAllocationsDigest,expectedPersistedDigest,
+  'adding an approval-only config container must not change the verified source snapshot');
+assert.notEqual(withOverrideInSource,expectedPersistedDigest,
+  'saving a corrected weight is material config evidence and must change the snapshot');
 assert.equal(expectedPersistedDigest,corrected.snapshotDigest,
   'saved numeric overrides and ownership approval must produce the same snapshot SHA-256');
 const rerun=await enforceStandaloneFinalRigidWeightReview({
