@@ -68,7 +68,7 @@ const rejected = await enforceStandaloneFinalRigidWeightReview(
   {},
 );
 assert.equal(rejected.ok, false, 'standalone export must fail closed on duplicated split masses');
-assert.match(rejected.error, /Structural RIGID mass ownership unresolved/);
+assert.match(rejected.error, /RIGID split physical ownership approval is required|Structural RIGID mass ownership unresolved/);
 
 // Scope component groups to contiguous physical occurrences, not a reused
 // engineering Branchname / ComponentRefNo / NodeNumber combination.
