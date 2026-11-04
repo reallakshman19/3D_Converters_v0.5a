@@ -138,4 +138,50 @@ const actual=await enforceStandaloneFinalRigidWeightReview({
 assert.equal(actual.ok,true,actual.error || '');
 assert.equal(prompts,1);
 assert.equal(actual.splitCustody.componentLedger[0].status,'VALIDATED');
+
+// Full approval lifecycle: an empirical 150 -> 15 kg correction changes both
+// the prepared XML and the saved overrides. The ownership snapshot must
+// match that *persisted* configuration on a second run, not need reapproval.
+const highXml = source(0,150);
+let savedWeights={};
+let savedAllocations={};
+let ownershipDialogCalls=0;
+const correctedJob=job(highXml);
+const corrected=await enforceStandaloneFinalRigidWeightReview({
+ xmlText:highXml,nodeRows:[],reviewProposals:[],
+},correctedJob,{
+ reviewFinalRigidWeights:async(issues)=>({
+   approvedKeys:issues.map(item=>item.key),
+   weightsByKey:Object.fromEntries(issues.map(item=>[item.key,15])),
+ }),
+ reviewSplitRigidOwnership:async(groups,meta)=>{
+   ownershipDialogCalls++;
+   return collectRigidSplitOwnershipDecisions(groups,meta,
+     (part)=>({type:'COMPONENT_LUMPED',mass:'15',owner:String(groups[0].nodes[1].nodeOrdinal),confirm:true})[part]);
+ },
+ onFinalRigidWeightsApplied:async({weightsByKey})=>{savedWeights={...weightsByKey};},
+ onSplitRigidOwnershipApproved:async({allocationsById})=>{savedAllocations={...allocationsById};},
+});
+assert.equal(corrected.ok,true,corrected.error || '');
+assert.equal(ownershipDialogCalls,1);
+assert.equal(Object.keys(savedAllocations).length,1);
+assert.equal(Object.keys(savedWeights).length,1);
+const persistent={
+  overrides:{rigidWeight:savedWeights},
+  rigidOwnership:{allocations:savedAllocations},
+};
+const rerun=await enforceStandaloneFinalRigidWeightReview({
+ xmlText:highXml,nodeRows:[],reviewProposals:[],
+},{...correctedJob,supportConfigJson:JSON.stringify(persistent)},{
+ reviewSplitRigidOwnership:async()=>{
+   throw new Error('Same unchanged source with persisted approval must never re-prompt');
+ },
+ reviewFinalRigidWeights:async()=>{
+   throw new Error('Same corrected weight must remain within empirical approval');
+ },
+});
+assert.equal(rerun.ok,true,rerun.error || '');
+assert.equal(rerun.snapshotDigest,corrected.snapshotDigest);
+assert.equal(rerun.splitCustody.componentLedger[0].status,'VALIDATED');
+assert.equal(rerun.reviewedRows.length,0);
 console.log('RIGID_SNAPSHOT_ENGINEER_SPLIT_OWNERSHIP_APPROVAL_PASS');
