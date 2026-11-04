@@ -83,11 +83,23 @@ async function _resolvePreviewStagedJsonText(options = {}, config = {}) {
   return { text: _toText(options.stagedJsonText), label: _toText(options.stagedSourceLabel) };
 }
 
+// A generation belongs to one Preview host. Host replacement/disconnection also
+// invalidates the result, even if there has been no newer Build request.
+function _isCurrentPreviewBuild(rootEl, host, generation) {
+  return rootEl?.querySelector?.('#mc-preview-table-host') === host
+    && host?.__xmlCiiPreviewGeneration === generation
+    && host.isConnected !== false
+    && rootEl.isConnected !== false;
+}
+
 function _bindManualPreviewButton(host, rootEl, xmlText, config, options, label = 'Building preview...') {
   host?.querySelectorAll('[data-mc-preview-build]').forEach((button) => {
     button.addEventListener('click', () => {
+      // Reserve on click, not inside the queued callback: newest request wins.
+      const generation = (host.__xmlCiiPreviewGeneration || 0) + 1;
+      host.__xmlCiiPreviewGeneration = generation;
       host.innerHTML = `<div class="model-converters-workflow-detail-note" style="text-align:center;padding:18px;">${_esc(label)}</div>`;
-      setTimeout(() => xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, { ...options, forceBuild: true }), 0);
+      setTimeout(() => xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, { ...options, forceBuild: true, __previewGeneration: generation }), 0);
     });
   });
 }
@@ -222,7 +234,14 @@ export function xmlCiiRenderPreviewPhase(xmlFile, config) {
 export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, options = {}) {
   const { onSaveConfig, openOverridePopup, ensureOverrides, forceBuild = false } = options;
   const host = rootEl?.querySelector('#mc-preview-table-host');
-  if (!host) return;
+  if (!host || host.isConnected === false || rootEl.isConnected === false) return;
+  const generation = options.__previewGeneration === undefined
+    ? (host.__xmlCiiPreviewGeneration = (host.__xmlCiiPreviewGeneration || 0) + 1)
+    : options.__previewGeneration;
+  if (!_isCurrentPreviewBuild(rootEl, host, generation)) return;
+  // Do not retain the one-shot reserved generation in later button callbacks.
+  options = { ...options };
+  delete options.__previewGeneration;
 
   // Fail closed for engineering correctness: the former persisted-cache key
   // omitted effective staged JSON, full XML/master contents, and some overrides.
@@ -233,8 +252,11 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
     return;
   }
 
+  options.onPreviewStarted?.({ generation });
   const stagedSource = await _resolvePreviewStagedJsonText(options, config);
+  if (!_isCurrentPreviewBuild(rootEl, host, generation)) return;
   const { branchRows, nodeRows } = xmlCiiDryRunPreview(xmlText, config, stagedSource.text);
+  if (!_isCurrentPreviewBuild(rootEl, host, generation)) return;
 
   if (!branchRows.length) {
     host.innerHTML = `${_manualPreviewActionHtml('Build Preview', false, config)}<div class="model-converters-workflow-detail-note">No branches found in XML.</div>`;
@@ -396,6 +418,7 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
 
   table.bind(host);
   _bindDtxrWallUpdateButton({ host, branchRows, config, ensureOverrides, onSaveConfig, stagedSourceLabel: stagedSource.label });
+  if (!_isCurrentPreviewBuild(rootEl, host, generation)) return;
   // Notify the caller only after the calculated Preview has rendered and bound its actions.
-  await options.onPreviewCommitted?.({ branchRows, nodeRows, stagedJsonText: stagedSource.text, stagedSourceLabel: stagedSource.label });
+  await options.onPreviewCommitted?.({ branchRows, nodeRows, stagedJsonText: stagedSource.text, stagedSourceLabel: stagedSource.label, generation });
 }

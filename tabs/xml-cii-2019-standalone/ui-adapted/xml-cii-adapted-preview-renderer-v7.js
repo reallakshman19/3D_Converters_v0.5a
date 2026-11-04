@@ -44,6 +44,15 @@ async function resolveStagedSource(options, config) {
   };
 }
 
+// Host identity and connectivity prevent a result from publishing after
+// navigation or after a newer Build/Rebuild has started.
+function isCurrentPreviewBuild(rootEl, host, generation) {
+  return rootEl?.querySelector?.('#mc-preview-table-host') === host
+    && host?.__xmlCiiPreviewGeneration === generation
+    && host.isConnected !== false
+    && rootEl.isConnected !== false;
+}
+
 function addNotice(host, message, bad = false) {
   if (!host) return;
   const existing = host.querySelector?.('[data-mc-dtxr-rating-notice]');
@@ -84,14 +93,22 @@ function installDtxrRatingAction({ host, rootEl, xmlText, config, options, branc
       button.disabled = false;
       return;
     }
+    // Reserve the requested rebuild before asynchronous config persistence.
+    const generation = (host.__xmlCiiPreviewGeneration || 0) + 1;
+    host.__xmlCiiPreviewGeneration = generation;
+    host.dataset.mcPreviewBuildCompleted = 'false';
+    discardPreviewCacheV7();
     try {
       await options?.onSaveConfig?.(config);
-      await xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, { ...options, forceBuild: true });
-      const rebuiltHost = rootEl?.querySelector?.('#mc-preview-table-host');
-      addNotice(rebuiltHost, ratingFetchMessage(result), result.applied === 0);
+      if (!isCurrentPreviewBuild(rootEl, host, generation)) return;
+      await xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, { ...options, forceBuild: true, __previewGeneration: generation });
+      if (!isCurrentPreviewBuild(rootEl, host, generation)) return;
+      addNotice(host, ratingFetchMessage(result), result.applied === 0);
     } catch (error) {
-      addNotice(host, `DTXR Rating fetch failed: ${text(error?.message || error)}`, true);
-      button.disabled = false;
+      if (isCurrentPreviewBuild(rootEl, host, generation)) {
+        addNotice(host, `DTXR Rating fetch failed: ${text(error?.message || error)}`, true);
+        button.disabled = false;
+      }
     }
   });
 }
@@ -115,33 +132,42 @@ function addCacheEvidence(host, { status, authority, reason = '' } = {}) {
 }
 
 // The legacy renderer owns all Build/Rebuild buttons. Its delegated options
-// retain this callback so manual and internal rebuilds reach the v7 wrapper.
+// retain these callbacks so manual and internal rebuilds reach the v7 wrapper.
 export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, options = {}) {
   const host = rootEl?.querySelector?.('#mc-preview-table-host');
-  if (!host) return;
+  if (!host || host.isConnected === false || rootEl.isConnected === false) return;
+
+  // Reserve the generation before source resolution: overlapping v7 calls
+  // cannot start an older calculation after a newer request has begun.
+  const generation = options.__previewGeneration === undefined
+    ? (host.__xmlCiiPreviewGeneration = (host.__xmlCiiPreviewGeneration || 0) + 1)
+    : options.__previewGeneration;
+  const isCurrent = () => isCurrentPreviewBuild(rootEl, host, generation);
+  if (!isCurrent()) return;
+  host.dataset.mcPreviewBuildCompleted = 'false';
 
   const stagedSource = await resolveStagedSource(options, config);
+  if (!isCurrent()) return;
+
   let committed = false;
   const delegatedOptions = {
     ...options,
+    __previewGeneration: generation,
     stagedJsonText: stagedSource.text,
     stagedSourceLabel: stagedSource.label,
     // Resolve afresh for manual builds; the initial idle source may have changed.
     resolveStagedJsonText: (currentConfig) => resolveStagedSource(options, currentConfig),
+    onPreviewStarted: ({ generation: buildGeneration }) => {
+      if (!isCurrentPreviewBuild(rootEl, host, buildGeneration)) return;
+      host.dataset.mcPreviewBuildCompleted = 'false';
+      // A new calculation invalidates the prior snapshot, including when it fails.
+      discardPreviewCacheV7();
+      options.onPreviewStarted?.({ generation: buildGeneration });
+    },
     onPreviewCommitted: async (result) => {
-      const currentHost = rootEl?.querySelector?.('#mc-preview-table-host');
-      if (!currentHost || !Array.isArray(result?.branchRows)) return;
-      committed = true;
-      currentHost.dataset.mcPreviewBuildCompleted = 'true';
-
-      installDtxrRatingAction({
-        host: currentHost,
-        rootEl,
-        xmlText,
-        config,
-        options,
-        branchRows: result.branchRows,
-      });
+      const buildGeneration = result?.generation;
+      const isBuildCurrent = () => isCurrentPreviewBuild(rootEl, host, buildGeneration);
+      if (!isBuildCurrent() || !Array.isArray(result?.branchRows)) return;
 
       let authority = null;
       let captured = null;
@@ -153,32 +179,46 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
           stagedJsonText: result.stagedJsonText,
           config,
         });
+        // Crypto completion is asynchronous. Never publish an obsolete result.
+        if (!isBuildCurrent()) return;
         captured = capturePreviewCacheV7(authority, undefined, undefined, result);
         if (!captured.stored) reason = captured.reason;
       } catch (error) {
         reason = text(error?.message || error);
       }
+      if (!isBuildCurrent()) return;
       if (!captured) {
         // A missing SHA-256 implementation must not suppress live Weight Match data.
         publishXmlCiiPreviewRatingSnapshot(result.branchRows, {
           authorityDigest: authority?.digest || 'explicit-preview-build',
         });
       }
-      addCacheEvidence(currentHost, {
+      installDtxrRatingAction({
+        host,
+        rootEl,
+        xmlText,
+        config,
+        options,
+        branchRows: result.branchRows,
+      });
+      addCacheEvidence(host, {
         status: captured?.stored ? 'REBUILT' : 'UNCACHED',
         authority,
         reason,
       });
       await options.onPreviewCommitted?.(result);
+      if (!isBuildCurrent()) return;
+      host.dataset.mcPreviewBuildCompleted = 'true';
+      committed = true;
     },
   };
 
   // No displayed Preview is restored from persisted rows. Only explicit builds
   // may publish new rows or a new authority-bound envelope.
   discardPreviewCacheV7();
-  host.dataset.mcPreviewBuildCompleted = 'false';
+  if (!isCurrent()) return;
   await buildLegacyPreview(rootEl, xmlText, config, delegatedOptions);
-  if (committed) return;
+  if (!isCurrent() || committed) return;
 
   let authority = null;
   let reason = 'explicit Build/Rebuild required';
@@ -191,5 +231,6 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
   } catch (error) {
     reason = text(error?.message || error);
   }
+  if (!isCurrent()) return;
   addCacheEvidence(host, { status: 'MISS', authority, reason });
 }
