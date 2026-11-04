@@ -15,32 +15,28 @@ import {
   xmlCiiDryRunPreview
 } from './xml-cii-adapted-preview-dryrun.js';
 
-const PV_CACHE_KEY = 'xml-cii-pv-cache-v8-dtxr';
-const _PV_CACHE_MAX_BYTES = 2500000;
+// Temporary handoff for the standalone v7 SHA-256 Preview authority. This is
+// NOT an eligible cache-read path: old incomplete-fingerprint entries are never
+// consulted to render engineering values. The v7 wrapper captures and removes
+// this explicit-build payload, then publishes its fully keyed envelope.
+const PREVIEW_V7_BRIDGE_KEY = 'xml-cii-pv-cache-v8-dtxr';
+const PREVIEW_V7_BRIDGE_MAX_BYTES = 2500000;
 
-function pvCacheFingerprint(xmlText, cfg) {
-  const xmlSig = `${(xmlText || '').length}:${(xmlText || '').slice(0, 80)}`;
-  const llSig = cfg?.linelist?.masterRows?.length || 0;
-  const pcSig = cfg?.pipingClass?.masterRows?.length || 0;
-  const fieldMapSig = JSON.stringify(cfg?.linelist?.fieldMap || {}).slice(0, 300);
-  const defaultSig = JSON.stringify(cfg?.processDefaults || {}).slice(0, 120);
-  const overrideSig = JSON.stringify(cfg?.overrides || {}).slice(0, 300);
-  return `pv5|${xmlSig}|${llSig}:${pcSig}|${fieldMapSig}|${defaultSig}|${overrideSig}`;
-}
-
-function readCache(key) {
+function publishExplicitPreviewBridge(branchRows, nodeRows) {
   try {
-    return JSON.parse(localStorage.getItem(key) || 'null');
+    const serialized = JSON.stringify({
+      fp: 'explicit-preview-build-v1-not-a-reuse-key',
+      data: { branchRows, nodeRows },
+      ts: Date.now(),
+    });
+    if (serialized.length <= PREVIEW_V7_BRIDGE_MAX_BYTES) {
+      localStorage.setItem(PREVIEW_V7_BRIDGE_KEY, serialized);
+    } else {
+      localStorage.removeItem(PREVIEW_V7_BRIDGE_KEY);
+    }
   } catch {
-    return null;
+    try { localStorage.removeItem(PREVIEW_V7_BRIDGE_KEY); } catch {}
   }
-}
-
-function writeCache(key, fp, data) {
-  try {
-    const payload = JSON.stringify({ fp, data, ts: Date.now() });
-    if (payload.length <= _PV_CACHE_MAX_BYTES) localStorage.setItem(key, payload);
-  } catch {}
 }
 
 function _overrideSource(overrides, bucket, key) {
@@ -252,24 +248,17 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
   const host = rootEl?.querySelector('#mc-preview-table-host');
   if (!host) return;
 
-  const _pvFp = pvCacheFingerprint(xmlText, config);
-  const _pvCached = !forceBuild ? readCache(PV_CACHE_KEY) : null;
-  const _pvFromCache = _pvCached?.fp === _pvFp && Array.isArray(_pvCached?.data?.branchRows) && _pvCached.data.branchRows.length > 0;
-
-  if (!forceBuild && !_pvFromCache) {
+  // Fail closed for engineering correctness: the former persisted-cache key
+  // omitted effective staged JSON, full XML/master contents, and some overrides.
+  // Without a complete validated input identity, only an explicit Build/Rebuild
+  // may calculate and present Preview rows. Do not resurrect prior saved rows.
+  if (!forceBuild) {
     _renderManualPreviewIdle(host, rootEl, xmlText, config, options);
     return;
   }
 
-  let stagedSource, branchRows, nodeRows;
-  if (_pvFromCache) {
-    stagedSource = { text: '', label: '(from cache)' };
-    branchRows = _pvCached.data.branchRows;
-    nodeRows = _pvCached.data.nodeRows || [];
-  } else {
-    stagedSource = await _resolvePreviewStagedJsonText(options, config);
-    ({ branchRows, nodeRows } = xmlCiiDryRunPreview(xmlText, config, stagedSource.text));
-  }
+  const stagedSource = await _resolvePreviewStagedJsonText(options, config);
+  const { branchRows, nodeRows } = xmlCiiDryRunPreview(xmlText, config, stagedSource.text);
 
   if (!branchRows.length) {
     host.innerHTML = `${_manualPreviewActionHtml('Build Preview', false, config)}<div class="model-converters-workflow-detail-note">No branches found in XML.</div>`;
@@ -429,9 +418,9 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
   if (stagedSource.label) host.insertAdjacentHTML('afterbegin', `<div class="model-converters-workflow-detail-note" style="margin:0 0 8px;border-color:#2b6cb0;color:#1e3a8a;background:#eff6ff;">DTXR staged source: ${_esc(stagedSource.label)}</div>`);
   if (defaultRows.length) host.insertAdjacentHTML('afterbegin', `<div class="model-converters-workflow-detail-note" style="margin:0 0 8px;border-color:#7f1d1d;color:#7f1d1d;background:#fff7f7;">${defaultRows.length} line${defaultRows.length === 1 ? '' : 's'} use config defaults. Default values are shown in dark red.</div>`);
 
-  if (!_pvFromCache) {
-    writeCache(PV_CACHE_KEY, _pvFp, { branchRows, nodeRows });
-  }
+  // The v7 wrapper and its internal-rebuild observer require this transient
+  // successful-build handoff to preserve rating snapshots and DTXR actions.
+  publishExplicitPreviewBridge(branchRows, nodeRows);
 
   table.bind(host);
   _bindDtxrWallUpdateButton({ host, branchRows, config, ensureOverrides, onSaveConfig, stagedSourceLabel: stagedSource.label });
