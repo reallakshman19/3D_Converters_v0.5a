@@ -1,4 +1,4 @@
-name: 'GLRD standalone real workflow clicks and downloaded XML gate'
+name: 'GLRD real standalone UI before-after actual downloaded XML parity'
 on:
   push:
     branches:
@@ -84,11 +84,26 @@ jobs:
           git -C /tmp/glrd/candidate checkout --detach 2b2939051bcd1f24e01163996f890168cfb311d9
           test "$(git -C /tmp/glrd/candidate rev-parse HEAD)" = 2b2939051bcd1f24e01163996f890168cfb311d9
           test -z "$(git -C /tmp/glrd/candidate status --porcelain --untracked-files=no)"
-      - name: Run actual standalone workbench source/JSON Trace import, Preview, Weight Match, Run and download
+      - name: Run PR2 baseline real standalone workflow and download actual enriched XML
         run: |
+          set -euo pipefail
           CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
           test -n "$CHROME_BIN"
           "$CHROME_BIN" --version | tee /tmp/glrd/outputs/chrome-version.txt
+          node tests/glrd_issue9_standalone_shell_click_download.mjs \
+            --root /tmp/glrd/phase1 --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/outputs/ui-baseline --label baseline \
+            --expected-sha 814157b162b981c9876f564f3cb0474435c8c37e \
+            --chromium "$CHROME_BIN"
+      - name: Run PR10 candidate real standalone workflow and download actual enriched XML
+        run: |
+          set -euo pipefail
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
           node tests/glrd_issue9_standalone_shell_click_download.mjs \
             --root /tmp/glrd/candidate --xml /tmp/glrd/inputs/source.xml \
             --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
@@ -96,58 +111,56 @@ jobs:
             --piping-class /tmp/glrd/inputs/piping-class.json \
             --weight /tmp/glrd/inputs/weight.json \
             --material-map /tmp/glrd/inputs/material-map.txt \
-            --out /tmp/glrd/outputs --label optimized \
+            --out /tmp/glrd/outputs/ui-candidate --label optimized \
             --expected-sha 2b2939051bcd1f24e01163996f890168cfb311d9 \
             --chromium "$CHROME_BIN"
-      - name: Capture pinned direct-browser Run oracle for byte-level first-difference RCA
+      - name: Compare genuine UI generated job, browser download bytes, and engineering facts
         run: |
-          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
-          node /tmp/glrd/capture/tests/glrd_phase4_browser_export_capture.mjs \
-            --root /tmp/glrd/phase1 --xml /tmp/glrd/inputs/source.xml \
-            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
-            --linelist /tmp/glrd/inputs/linelist.xlsx \
-            --piping-class /tmp/glrd/inputs/piping-class.json \
-            --weight /tmp/glrd/inputs/weight.json \
-            --material-map /tmp/glrd/inputs/material-map.txt \
-            --out /tmp/glrd/outputs --label baseline \
-            --expected-sha 814157b162b981c9876f564f3cb0474435c8c37e \
-            --chromium "$CHROME_BIN"
-      - name: Compare actual downloaded XML to pinned Run oracle and record first byte difference
-        run: |
+          set -euo pipefail
           python3 - <<'PY'
           import json,hashlib
           from pathlib import Path
           out=Path('/tmp/glrd/outputs')
-          r=json.loads((out/'glrd-shell-g3-download.json').read_text())
-          assert r['status']=='PASS',r
-          assert r['observed']['preview']['branchRows']==30,r['observed']
-          assert r['observed']['preview']['dtxrRatingAction'],r['observed']
-          baseline=(out/'baseline-enriched.xml').read_bytes()
-          downloaded=(out/'downloads'/r['download']['name']).read_bytes()
+          qa,qb=(out/'ui-baseline',out/'ui-candidate')
+          a,b=[json.loads((p/'glrd-shell-g3-download.json').read_text()) for p in (qa,qb)]
+          assert a['status']==b['status']=='PASS',(a,b)
+          assert a['inputs']==b['inputs'],'Fixture mismatch in UI qualification'
+          A,B=a['observed'],b['observed']
+          assert A['effectiveJobAuthority']==B['effectiveJobAuthority'], 'UI produced different effective workflow jobs'
+          for obj in (A,B):
+            assert obj['preview']['branchRows']==30,obj
+            assert obj['preview']['dtxrRatingAction'] and obj['preview']['versionedCachePresent'],obj
+            assert obj['popupSkipped']>=0 and obj['renderedDownloadEnabled'],obj
+            assert obj['readinessDisabled'] is False,obj
+          xa=(qa/'downloads'/a['download']['name']).read_bytes()
+          xb=(qb/'downloads'/b['download']['name']).read_bytes()
           sha=lambda data:hashlib.sha256(data).hexdigest()
-          assert sha(downloaded)==r['download']['sha256']
-          n=min(len(baseline),len(downloaded))
-          first_diff=next((i for i in range(n) if baseline[i]!=downloaded[i]),None)
-          if first_diff is None and len(baseline)!=len(downloaded):first_diff=n
-          context=lambda data: data[max(0,first_diff-90):first_diff+140].decode('utf-8',errors='replace') if first_diff is not None else ''
-          comparison={
-            'identical':baseline==downloaded,
-            'baseline':{'bytes':len(baseline),'sha256':sha(baseline)},
-            'download':{'filename':r['download']['name'],'bytes':len(downloaded),'sha256':sha(downloaded)},
-            'firstDifferentByteOffset':first_diff,
-            'baselineContext':context(baseline),
-            'downloadContext':context(downloaded),
-            'scope':'Actual standalone shell-driven downloaded bytes versus pinned direct browser Run service, with masterContext seeded from constructed config',
+          assert sha(xa)==a['download']['sha256'] and sha(xb)==b['download']['sha256']
+          n=min(len(xa),len(xb))
+          first=next((i for i in range(n) if xa[i]!=xb[i]),None)
+          if first is None and len(xa)!=len(xb):first=n
+          context=lambda data: data[max(0,first-80):first+160].decode('utf-8',errors='replace') if first is not None else ''
+          report={
+             'schema':'glrd-ui-actual-download-before-after-v1','scope':'actual standalone workflow UI file import for source/stage, manual masterContext preloaded; not master-file UI upload or full app startup',
+             'status':'PASS' if xa==xb else 'FAIL',
+             'baselineCommit':a['commit'],'candidateCommit':b['commit'],
+             'inputSha256':a['inputs'],
+             'effectiveJobAuthority':A['effectiveJobAuthority'],
+             'before':{'file':a['download']['name'],'bytes':len(xa),'sha256':sha(xa),'steps':A['steps']},
+             'after':{'file':b['download']['name'],'bytes':len(xb),'sha256':sha(xb),'steps':B['steps']},
+             'firstDifferentByte':first,'beforeContext':context(xa),'afterContext':context(xb),
+             'fullByteIdentity':xa==xb,
+             'note':'Historical 820150-byte direct-service oracle has fewer effective options than UI; not used for this equal-input UI-to-UI gate'
           }
-          (out/'download-vs-service-first-diff.json').write_text(json.dumps(comparison,indent=2)+'\n')
-          print(json.dumps(comparison,indent=2))
-          assert comparison['identical'], 'ENGINEERING/EXPORT PARITY NOT PROVEN: downloaded XML differs; see first difference artifact'
+          (out/'ui-actual-download-before-after.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          assert report['status']=='PASS','Engineering/UI downloaded XML parity FAILED'
           PY
-      - name: Preserve real workbench UI and downloaded XML
+      - name: Preserve actual before-after UI downloaded XML files and report even on failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: glrd-standalone-workbench-real-download-evidence
+          name: glrd-real-ui-before-after-actual-xml-downloads
           path: /tmp/glrd/outputs/
           if-no-files-found: warn
           retention-days: 14
