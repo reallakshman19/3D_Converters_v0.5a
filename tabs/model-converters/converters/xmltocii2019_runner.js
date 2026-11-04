@@ -77,6 +77,11 @@ export async function enforceModelConvertersRigidOwnership({
   if (!effectiveSourceId || !xmlText || !sourceText) {
     throw new Error('Model Converters RIGID ownership requires a named source and final Python XML.');
   }
+  // Config has its own canonical, allocation-stripped snapshot field. Do
+  // not also hash an unnormalized supportConfigJson string in run options:
+  // merely persisting an approval would invalidate the same exact inputs.
+  const snapshotOptions = { ...(options || {}) };
+  delete snapshotOptions.supportConfigJson;
   const snapshotDigest = await digestRigidOwnershipSnapshot({
     sourceId: effectiveSourceId,
     sourceName: effectiveName,
@@ -84,7 +89,7 @@ export async function enforceModelConvertersRigidOwnership({
     stagedJsonText,
     supportConfigJson: JSON.stringify(config),
     branchSelection,
-    options,
+    options: snapshotOptions,
     preparedXmlText: xmlText,
   });
   const popup = runtime.reviewSplitRigidOwnership ||
