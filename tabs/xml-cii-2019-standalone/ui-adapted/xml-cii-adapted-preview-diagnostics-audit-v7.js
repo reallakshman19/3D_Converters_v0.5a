@@ -25,6 +25,8 @@ export function createCurrentPreviewB313Handoff(host) {
     onPreviewStarted: () => {
       committedRows = [];
       committedGeneration = null;
+      // The in-progress result is not a successful Preview completion.
+      if (host?.dataset) host.dataset.mcPreviewBuildCompleted = 'false';
     },
     onPreviewCommitted: ({ branchRows, generation } = {}) => {
       if (host?.__xmlCiiPreviewGeneration !== generation) return;
