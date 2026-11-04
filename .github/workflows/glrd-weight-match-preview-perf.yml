@@ -44,6 +44,35 @@ jobs:
           print('GLRD_ALL_ACTUAL_PYTHON_RIGID_AUX_RECONCILED', json.dumps(manifest['summary']))
           PY
           sha256sum /tmp/glrd-preview/results/GLRD-enriched.xml /tmp/glrd-preview/results/GLRD.cii
+      - name: Record source identity evidence for reported original 939 to 10020 edge
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, xml.etree.ElementTree as ET
+          from pathlib import Path
+          p=Path('/tmp/glrd-preview')
+          report={'reportedEdge':[939,10020], 'datasets':{}}
+          for label,path in (('unchangedRawSource',p/'inputs/source.xml'),('baselineEnriched',p/'results/GLRD-enriched.xml')):
+              root=ET.parse(path).getroot()
+              tag=lambda el:el.tag.rsplit('}',1)[-1]
+              numbers={939:[],10020:[]}
+              branches=[v for v in root.iter() if tag(v)=='Branch']
+              edgeCount=0
+              for ordinal,b in enumerate(branches):
+                  name=next(((x.text or '').strip() for x in b if tag(x)=='Branchname'),'')
+                  nodes=[v for v in b if tag(v)=='Node']
+                  retained=[]
+                  for nodeOrdinal,node in enumerate(nodes):
+                      val=next(((x.text or '').strip() for x in node if tag(x)=='NodeNumber'),'')
+                      try: number=int(val)
+                      except ValueError: continue
+                      if number in numbers: numbers[number].append({'branchOrdinal':ordinal,'branchName':name,'nodeOrdinal':nodeOrdinal})
+                      if number>0: retained.append(number)
+                  edgeCount+=sum(a==939 and b==10020 for a,b in zip(retained,retained[1:]))
+              report['datasets'][label]={'branchCount':len(branches),'939':numbers[939], '10020':numbers[10020], 'directEdges939to10020':edgeCount}
+          (p/'results/GLRD-original-939-to-10020-identity.json').write_text(json.dumps(report,indent=2)+'\\n')
+          print('GLRD_REPORTED_939_TO_10020_SOURCE_IDENTITY',json.dumps(report))
+          PY
       - name: Classify existing real GLRD contracted-engine reducer blocker against base branch
         run: |
           set -euo pipefail
