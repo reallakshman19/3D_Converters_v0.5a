@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { webcrypto } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { XML_CII_PREVIEW_CACHE_KEY } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-cache-v7.js';
 
 import { xmlCiiDryRunPreview } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-dryrun.js';
 import { xmlCiiBuildAndRenderPreview as buildLegacyPreview } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer.js';
@@ -454,4 +455,42 @@ test('generation :421 — a newer request during table binding blocks obsolete c
   assert.equal(newResults[0].branchRows[0].rating, '600');
   assert.equal(readXmlCiiPreviewRatingSnapshot().records[0].rating, '600');
   assert.match(host.textContent, /newer-B/);
+});
+
+
+test('R5 successful Build and Rebuild never write the v7 envelope key', async () => {
+  resetSnapshot();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const values = new Map();
+  const written = [];
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => { written.push(key); values.set(key, String(value)); },
+    removeItem: (key) => values.delete(key),
+  };
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage });
+  try {
+    const { root, host } = makeRoot();
+    const config = makeConfig();
+    const results = [];
+    const callbacks = options({ onPreviewCommitted: (result) => results.push(result) });
+    await buildV7Preview(root, XML, config, callbacks);
+    assert.equal(results.length, 1);
+    assert.equal(host.dataset.mcPreviewBuildCompleted, 'true');
+    assert.equal(readXmlCiiPreviewRatingSnapshot().records[0].rating, '150');
+    assert.equal(values.has(XML_CII_PREVIEW_CACHE_KEY), false, 'Build cannot leave a persisted envelope');
+    assert.equal(written.includes(XML_CII_PREVIEW_CACHE_KEY), false, 'Build cannot write an envelope');
+
+    config.overrides.rating['/REG/B1'] = '600';
+    await buildV7Preview(root, XML, config, callbacks);
+    assert.equal(results.length, 2);
+    assert.equal(results[1].branchRows[0].rating, '600');
+    assert.equal(readXmlCiiPreviewRatingSnapshot().records[0].rating, '600');
+    assert.equal(values.has(XML_CII_PREVIEW_CACHE_KEY), false, 'Rebuild cannot leave a persisted envelope');
+    assert.equal(written.includes(XML_CII_PREVIEW_CACHE_KEY), false, 'Rebuild cannot write an envelope');
+  } finally {
+    clearXmlCiiPreviewRatingSnapshot();
+    if (previous) Object.defineProperty(globalThis, 'localStorage', previous);
+    else delete globalThis.localStorage;
+  }
 });

@@ -53,7 +53,7 @@ test('unavailable localStorage cannot block fresh Preview rating or clearing', a
     assert.equal(restorePreviewCacheV7(authority).restored, false);
     const captured = capturePreviewCacheV7(authority, undefined, undefined, committed);
     assert.equal(captured.stored, false);
-    assert.equal(captured.reason, 'storage-unavailable');
+    assert.equal(captured.reason, 'persistence-disabled');
     assertCurrentRating();
   });
 });
@@ -74,28 +74,30 @@ test('throwing getItem and malformed legacy JSON are never used to publish', asy
     assert.equal(readXmlCiiPreviewRatingSnapshot().records.length, 0);
     assert.equal(reads, 0, 'old envelope and bridge must never be read');
     const captured = capturePreviewCacheV7(authority, storage, undefined, committed);
-    assert.equal(captured.stored, true);
+    assert.equal(captured.stored, false);
+    assert.equal(captured.reason, 'persistence-disabled');
     assert.equal(reads, 0);
     assertCurrentRating();
   });
 });
 
-test('QuotaExceededError makes optional persistence UNCACHED, not the calculation', async () => {
+test('QuotaExceededError storage is never written and current calculation remains usable', async () => {
+  let writes = 0;
   const storage = {
     getItem() { throw new Error('getItem blocked'); },
-    setItem() { const e = new Error('quota exceeded'); e.name = 'QuotaExceededError'; throw e; },
+    setItem() { writes++; const e = new Error('quota exceeded'); e.name = 'QuotaExceededError'; throw e; },
     removeItem() {},
   };
   await withStorage({ value: storage, writable: true }, () => {
     const result = capturePreviewCacheV7(authority, storage, undefined, committed);
     assert.equal(result.stored, false);
-    assert.equal(result.reason, 'storage-write-failed');
-    assert.equal(result.error?.name, 'QuotaExceededError');
+    assert.equal(result.reason, 'persistence-disabled');
+    assert.equal(writes, 0);
     assertCurrentRating();
   });
 });
 
-test('oversized envelopes are not persisted but remain current in memory', async () => {
+test('oversized Preview data is never persisted but remains current in memory', async () => {
   let writes = 0;
   const storage = {
     getItem() { return null; },
@@ -105,13 +107,13 @@ test('oversized envelopes are not persisted but remain current in memory', async
   await withStorage({ value: storage, writable: true }, () => {
     const result = capturePreviewCacheV7(authority, storage, 8, committed);
     assert.equal(result.stored, false);
-    assert.equal(result.reason, 'cache-envelope-too-large');
+    assert.equal(result.reason, 'persistence-disabled');
     assert.equal(writes, 0);
     assertCurrentRating();
   });
 });
 
-test('optional cache serialization failure cannot discard a successful rating', async () => {
+test('circular Preview rows remain current without optional envelope serialization', async () => {
   const cyclic = { branchName: '/STORAGE/B1', lineKey: 'S1', rating: '900' };
   cyclic.self = cyclic;
   const storage = { getItem() { return null; }, setItem() {}, removeItem() {} };
@@ -120,7 +122,7 @@ test('optional cache serialization failure cannot discard a successful rating', 
       branchRows: [cyclic], nodeRows: [],
     });
     assert.equal(result.stored, false);
-    assert.equal(result.reason, 'cache-serialization-failed');
+    assert.equal(result.reason, 'persistence-disabled');
     assertCurrentRating();
   });
 });

@@ -7,7 +7,6 @@ export const XML_CII_PREVIEW_CACHE_SCHEMA = 'xml-cii-preview-cache/v8-rating-pol
 export const XML_CII_PREVIEW_CACHE_KEY = 'xml-cii-pv-cache-v8-rating-policy';
 export const XML_CII_PREVIEW_LEGACY_CACHE_KEY = 'xml-cii-pv-cache-v8-dtxr';
 
-const DEFAULT_MAX_BYTES = 2500000;
 const LEGACY_KEYS = Object.freeze([
   XML_CII_PREVIEW_LEGACY_CACHE_KEY,
   'xml-cii-pv-cache-v6',
@@ -107,49 +106,18 @@ export function restorePreviewCacheV7(_authority, storage) {
   return { restored: false, reason: 'explicit-preview-build-required' };
 }
 
-export function capturePreviewCacheV7(authority, storage, maxBytes = DEFAULT_MAX_BYTES, committedResult = null) {
-  const target = storageOrNull(storage);
+// The direct result is the only engineering authority. Optional envelope
+// persistence was removed: the envelope was never restored, and retaining it
+// would leave another potentially stale copy of Preview rows in storage.
+export function capturePreviewCacheV7(authority, _storage, _maxBytes, committedResult = null) {
   if (!authority?.digest) return { stored: false, reason: 'authority-unavailable' };
-  // Only directly committed rows may be published or optionally persisted.
-  // In particular, never read the old temporary storage bridge.
   if (!Array.isArray(committedResult?.branchRows)) {
     return { stored: false, reason: 'explicit-preview-result-required' };
   }
-  const legacyPayload = {
-    fp: 'explicit-preview-build-v1-not-a-reuse-key',
-    data: { branchRows: committedResult.branchRows, nodeRows: committedResult.nodeRows },
-    ts: Date.now(),
-  };
-
-  publishXmlCiiPreviewRatingSnapshot(legacyPayload.data.branchRows, {
+  publishXmlCiiPreviewRatingSnapshot(committedResult.branchRows, {
     authorityDigest: authority.digest,
   });
-  if (!target) return { stored: false, reason: 'storage-unavailable' };
-  const envelope = {
-    schema: XML_CII_PREVIEW_CACHE_SCHEMA,
-    authority,
-    legacyPayload,
-    writtenAt: new Date().toISOString(),
-  };
-  let serialized;
-  try {
-    serialized = JSON.stringify(envelope);
-  } catch (error) {
-    // Serialization is optional persistence, not an engineering failure.
-    return { stored: false, reason: 'cache-serialization-failed', error };
-  }
-  if (serialized.length > maxBytes) {
-    try { target.removeItem(XML_CII_PREVIEW_CACHE_KEY); } catch {}
-    return { stored: false, reason: 'cache-envelope-too-large', bytes: serialized.length };
-  }
-  try {
-    target.setItem(XML_CII_PREVIEW_CACHE_KEY, serialized);
-    for (const key of OLD_ENVELOPE_KEYS) target.removeItem(key);
-    return { stored: true, reason: 'stored', bytes: serialized.length, envelope };
-  } catch (error) {
-    try { target.removeItem(XML_CII_PREVIEW_CACHE_KEY); } catch {}
-    return { stored: false, reason: 'storage-write-failed', error };
-  }
+  return { stored: false, reason: 'persistence-disabled' };
 }
 
 export function clearPreviewCacheBridge(storage) {
@@ -176,7 +144,9 @@ export function clearPreviewCachesV7(storage) {
 
 export function discardPreviewCacheV7(storage) {
   const target = storageOrNull(storage);
-  try { target?.removeItem(XML_CII_PREVIEW_CACHE_KEY); } catch {}
+  if (target) for (const key of [XML_CII_PREVIEW_CACHE_KEY, ...OLD_ENVELOPE_KEYS]) {
+    try { target.removeItem(key); } catch {}
+  }
   clearPreviewCacheBridge(target);
 }
 

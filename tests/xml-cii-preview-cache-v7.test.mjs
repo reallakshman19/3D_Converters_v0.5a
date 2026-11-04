@@ -11,7 +11,9 @@ import {
   XML_CII_PREVIEW_CACHE_KEY,
   XML_CII_PREVIEW_LEGACY_CACHE_KEY,
   capturePreviewCacheV7,
+  clearPreviewCachesV7,
   createPreviewCacheAuthority,
+  discardPreviewCacheV7,
   restorePreviewCacheV7,
   stablePreviewCacheStringify,
 } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-cache-v7.js';
@@ -77,29 +79,53 @@ test('override changes beyond the former 300-character truncation invalidate aut
   assert.notEqual(left.digest, right.digest);
 });
 
-test('persisted Preview rows never restore without a fresh explicit build', async () => {
+test('R5 pre-seeded stale v7 envelope never restores and cleanup removes it', async () => {
   const storage = new MemoryStorage();
   const authority = await createPreviewCacheAuthority({ xmlText: '<Rating>150</Rating>', config: {} });
-
-  storage.setItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY, JSON.stringify(legacyPayload('150')));
-  const fromBridge = capturePreviewCacheV7(authority, storage);
-  assert.equal(fromBridge.stored, false);
-  assert.equal(fromBridge.reason, 'explicit-preview-result-required');
-
-  storage.setItem(XML_CII_PREVIEW_CACHE_KEY, JSON.stringify({
+  const stale = {
     schema: 'xml-cii-preview-cache/v8-rating-policy',
     authority,
     legacyPayload: legacyPayload('150'),
-  }));
-  assert.equal(restorePreviewCacheV7(authority, storage).restored, false);
-  assert.equal(storage.getItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY), null);
+  };
+  storage.setItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY, JSON.stringify(legacyPayload('150')));
+  storage.setItem(XML_CII_PREVIEW_CACHE_KEY, JSON.stringify(stale));
+  storage.setItem('xml-cii-pv-cache-v7', JSON.stringify(stale));
+  let reads = 0;
+  const getItem = storage.getItem.bind(storage);
+  storage.getItem = (key) => { reads++; return getItem(key); };
 
-  const fresh = capturePreviewCacheV7(authority, storage, undefined, {
+  const restored = restorePreviewCacheV7(authority, storage);
+  assert.deepEqual(restored, { restored: false, reason: 'explicit-preview-build-required' });
+  assert.equal(reads, 0, 'restoration must not even inspect stale persisted rows');
+
+  discardPreviewCacheV7(storage);
+  assert.equal(storage.getItem(XML_CII_PREVIEW_CACHE_KEY), null);
+  assert.equal(storage.getItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY), null);
+  assert.equal(storage.getItem('xml-cii-pv-cache-v7'), null);
+  storage.setItem(XML_CII_PREVIEW_CACHE_KEY, JSON.stringify(stale));
+  clearPreviewCachesV7(storage);
+  assert.equal(storage.getItem(XML_CII_PREVIEW_CACHE_KEY), null);
+});
+
+test('R5 directly committed Preview rows publish rating without writing a v7 envelope', async () => {
+  const storage = new MemoryStorage();
+  const authority = await createPreviewCacheAuthority({ xmlText: '<Rating>900</Rating>', config: {} });
+  const writes = [];
+  storage.setItem = (key, value) => {
+    writes.push(key);
+    storage.values.set(key, String(value));
+  };
+  const absent = capturePreviewCacheV7(authority, storage);
+  assert.equal(absent.stored, false);
+  assert.equal(absent.reason, 'explicit-preview-result-required');
+
+  const result = capturePreviewCacheV7(authority, storage, undefined, {
     branchRows: [{ branchName: '/A/B1', rating: '900' }], nodeRows: [],
   });
-  assert.equal(fresh.stored, true);
-  assert.equal(JSON.parse(storage.getItem(XML_CII_PREVIEW_CACHE_KEY)).legacyPayload.data.branchRows[0].rating, '900');
-  assert.equal(restorePreviewCacheV7(authority, storage).restored, false);
+  assert.equal(result.stored, false);
+  assert.equal(result.reason, 'persistence-disabled');
+  assert.deepEqual(writes, [], 'no persisted Preview payload may be written');
+  assert.equal(storage.getItem(XML_CII_PREVIEW_CACHE_KEY), null);
 });
 
 test('phase routing and internal rebuild capture use the cache v7 boundary', () => {
