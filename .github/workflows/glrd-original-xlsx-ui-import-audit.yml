@@ -1,0 +1,122 @@
+name: 'GLRD native original XLSX workbook import via actual standalone UI'
+on:
+  push:
+    branches:
+      - audit/glrd-native-xlsx-master-import-20261104
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  renderer-containment-and-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify one-production-file containment scope and dependencies
+        run: |
+          set -euo pipefail
+          node --check tests/glrd_original_linelist_xlsx_ui_import.mjs
+          git merge-base --is-ancestor 2b2939051bcd1f24e01163996f890168cfb311d9 HEAD
+          git diff --name-only 2b2939051bcd1f24e01163996f890168cfb311d9 HEAD
+          git diff --name-only 2b2939051bcd1f24e01163996f890168cfb311d9 HEAD | while read -r file; do
+            case "$file" in
+              tests/glrd_original_linelist_xlsx_ui_import.mjs|.github/workflows/glrd-original-xlsx-ui-import-audit.yml) ;;
+              *) echo "Unexpected file changed: $file"; exit 1;;
+            esac
+          done
+          python3 -m pip install --quiet openpyxl
+      - name: Checkout unchanged Phase 1 and verified capture harness commits
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/glrd/inputs /tmp/glrd/outputs
+          git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/phase1
+          git -C /tmp/glrd/phase1 checkout --detach 814157b162b981c9876f564f3cb0474435c8c37e
+          git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/capture
+          git -C /tmp/glrd/capture checkout --detach 19efc37c96b314e4e94194e46d348743207fea6c
+          test "$(git -C /tmp/glrd/phase1 rev-parse HEAD)" = "814157b162b981c9876f564f3cb0474435c8c37e"
+          test "$(git -C /tmp/glrd/capture rev-parse HEAD)" = "19efc37c96b314e4e94194e46d348743207fea6c"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          test -z "$(git -C /tmp/glrd/phase1 status --porcelain --untracked-files=no)"
+      - name: Fetch and verify immutable GLRD original references
+        run: |
+          set -euo pipefail
+          SRC="https://raw.githubusercontent.com/reallakshman19/3D_Converters/3377b7f4baeeee5851e72dcc414d6c4a93f5a933/Benchmarks/XML-CII-2019/revamped"
+          MST="https://raw.githubusercontent.com/reallakshman19/3D_Converters/25db94769994751bb0fb6e6d83a578efd9ac8162/docs/docs/Masters"
+          cd /tmp/glrd/inputs
+          curl --retry 4 -fLsS "$SRC/GLRD-1000-PSI-02.xml" -o source.xml
+          curl --retry 4 -fLsS "$SRC/STF_2026Nov03-0839_managed_stage.json" -o staged.json
+          curl --retry 4 -fLsS "$SRC/STD-00-PX-4338-01001-0001-02.xlsx" -o linelist.xlsx
+          curl --retry 4 -fLsS "$MST/Piping_class_master.json" -o piping-class.json
+          curl --retry 4 -fLsS "$MST/wtValveweights.json" -o weight.json
+          curl --retry 4 -fLsS "$MST/PCF_MAT_MAP.TXT" -o material-map.txt
+          test "$(git hash-object source.xml)" = "8c60c9e58995172d48a9d1ebfa23569db5659f06"
+          test "$(git hash-object staged.json)" = "c611f53d6571cae7df51d9ac817a723be493b952"
+          test "$(git hash-object linelist.xlsx)" = "717b41959c9ab47811f47ea4270125f5f257e3c2"
+          test "$(git hash-object piping-class.json)" = "af218bf3692acd66c93e190635633e14ccfb30ac"
+          test "$(git hash-object weight.json)" = "f969d32dfea1bf03eb7dc310d9f3becacad5a4d1"
+          test "$(git hash-object material-map.txt)" = "371ce3a1bd854228650847d8f511e98baa5dc5f3"
+          sha256sum source.xml staged.json linelist.xlsx piping-class.json weight.json material-map.txt > /tmp/glrd/outputs/input-custody-sha256.txt
+      - name: Construct and fingerprint same effective config for both revisions
+        run: |
+          node --input-type=module -e "import {defaultXmlCii2019SupportConfigJson as f} from '/tmp/glrd/phase1/tabs/xml-cii-2019-standalone/xml-cii-standalone-default-config.js'; process.stdout.write(f());" > /tmp/glrd/inputs/defaults.json
+          python3 /tmp/glrd/capture/tests/glrd_build_reference_browser_config.py \
+            --line-list /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --defaults /tmp/glrd/inputs/defaults.json \
+            --out /tmp/glrd/inputs/config.json \
+            --report /tmp/glrd/outputs/config-provenance.json
+          test "$(sha256sum /tmp/glrd/inputs/config.json | cut -d ' ' -f1)" = "292246ab4c97cd388265c70ceb3a613dc8d124debdaffd3ef8b2cf25cb049b05"
+      - name: Checkout isolated containment candidate immutable commit
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/reallakshman19/3D_Converters_v0.5a.git /tmp/glrd/candidate
+          git -C /tmp/glrd/candidate checkout --detach 2b2939051bcd1f24e01163996f890168cfb311d9
+          test "$(git -C /tmp/glrd/candidate rev-parse HEAD)" = 2b2939051bcd1f24e01163996f890168cfb311d9
+          test -z "$(git -C /tmp/glrd/candidate status --porcelain --untracked-files=no)"
+      - name: Upload pinned native XLSX through standalone line-list master file control
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$CHROME_BIN"
+          "$CHROME_BIN" --version | tee /tmp/glrd/outputs/chrome-version.txt
+          node tests/glrd_original_linelist_xlsx_ui_import.mjs \
+            --root /tmp/glrd/candidate --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/outputs --label optimized \
+            --expected-sha 2b2939051bcd1f24e01163996f890168cfb311d9 \
+            --chromium "$CHROME_BIN"
+      - name: Capture browser UI workbook parsing, active sheet, fields and counts
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report=json.loads(Path('/tmp/glrd/outputs/original-linelist-xlsx-ui-import.json').read_text())
+          print(json.dumps(report,indent=2))
+          assert report['status']=='PASS', 'The actual original XLSX could not be parsed by browser UI'
+          rows=report['observed']['normalizedRowCount']
+          assert rows>0,'The original XLSX produced zero imported rows'
+          print(f'Original controlled config has 107 line rows; native XLSX browser import has {rows} rows.')
+          PY
+      - name: Preserve original XLSX UI import diagnostics and input custody
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glrd-original-xlsx-ui-import-qualification
+          path: /tmp/glrd/outputs/
+          if-no-files-found: warn
+          retention-days: 14
