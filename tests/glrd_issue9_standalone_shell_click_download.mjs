@@ -80,6 +80,30 @@ async function browserSocket(port,pagePort){
   }
   throw Error('Chromium DevTools page unavailable');
 }
+async function configureBrowserDownloads(debugPort,downloadPath) {
+  const versionResponse=await fetch('http://127.0.0.1:'+debugPort+'/json/version');
+  if(!versionResponse.ok)throw Error('Cannot fetch Chromium browser CDP endpoint');
+  const info=await versionResponse.json();
+  if(!info.webSocketDebuggerUrl)throw Error('Chromium browser CDP target missing');
+  const socket=new WebSocket(info.webSocketDebuggerUrl);
+  await new Promise((ok,no)=>{socket.onopen=ok;socket.onerror=()=>no(Error('Browser CDP socket failed'));});
+  const events=[];
+  socket.addEventListener('message',event=>{
+    try{const value=JSON.parse(event.data);
+      if(value.method?.startsWith('Browser.download'))events.push({method:value.method,params:value.params});
+    }catch{}
+  });
+  await new Promise((ok,no)=>{
+    const handler=event=>{const val=JSON.parse(event.data);
+      if(val.id!==141)return;socket.removeEventListener('message',handler);
+      if(val.error)no(Error('Browser.setDownloadBehavior: '+JSON.stringify(val.error)));else ok();
+    };
+    socket.addEventListener('message',handler);
+    socket.send(JSON.stringify({id:141,method:'Browser.setDownloadBehavior',params:{
+      behavior:'allow',downloadPath,eventsEnabled:true}}));
+  });
+  return {socket,events};
+}
 async function evaluate(wsUrl,expression,downloadsDir){
   const ws=new WebSocket(wsUrl);
   await new Promise((ok,no)=>{ws.onopen=ok;ws.onerror=()=>no(Error('CDP connection failed'));});
@@ -207,6 +231,7 @@ async function browserCapture(files){
   chrome.stderr.on('data',chunk=>{if(stderr.length<16000)stderr+=String(chunk).slice(0,2000);});
   try{
     const ws=await browserSocket(debugPort,pagePort);
+    const downloads=await configureBrowserDownloads(debugPort,join(OUT,'downloads'));
     const origin='http://127.0.0.1:'+pagePort;
     const absolute=EXPRESSION.replaceAll("'/__glrd/", "'"+origin+"/__glrd/")
       .replaceAll("'/tabs/", "'"+origin+"/tabs/");
@@ -229,8 +254,9 @@ async function browserCapture(files){
       }
       await sleep(125);
     }
-    if(!complete)throw Error('Actual browser click produced no completed downloaded XML before Chrome cleanup');
-    return {...rendered,actualDownloadClick:click};
+    if(!complete)throw Error('Actual browser click produced no completed downloaded XML before Chrome cleanup; Browser CDP events='+JSON.stringify(downloads.events));
+    try { downloads.socket.close(); } catch {}
+    return {...rendered,actualDownloadClick:click,downloadEvents:downloads.events.slice(-8)};
 
   }catch(e){throw Error(String(e.message||e)+'; chrome stderr='+stderr.slice(-3000));}
   finally{
