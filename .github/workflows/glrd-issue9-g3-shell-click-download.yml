@@ -99,20 +99,49 @@ jobs:
             --out /tmp/glrd/outputs --label optimized \
             --expected-sha 2b2939051bcd1f24e01163996f890168cfb311d9 \
             --chromium "$CHROME_BIN"
-      - name: Qualify actual downloaded bytes, not just Run return data
+      - name: Capture pinned direct-browser Run oracle for byte-level first-difference RCA
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          node /tmp/glrd/capture/tests/glrd_phase4_browser_export_capture.mjs \
+            --root /tmp/glrd/phase1 --xml /tmp/glrd/inputs/source.xml \
+            --staged /tmp/glrd/inputs/staged.json --config /tmp/glrd/inputs/config.json \
+            --linelist /tmp/glrd/inputs/linelist.xlsx \
+            --piping-class /tmp/glrd/inputs/piping-class.json \
+            --weight /tmp/glrd/inputs/weight.json \
+            --material-map /tmp/glrd/inputs/material-map.txt \
+            --out /tmp/glrd/outputs --label baseline \
+            --expected-sha 814157b162b981c9876f564f3cb0474435c8c37e \
+            --chromium "$CHROME_BIN"
+      - name: Compare actual downloaded XML to pinned Run oracle and record first byte difference
         run: |
           python3 - <<'PY'
           import json,hashlib
           from pathlib import Path
-          r=json.loads(Path('/tmp/glrd/outputs/glrd-shell-g3-download.json').read_text())
+          out=Path('/tmp/glrd/outputs')
+          r=json.loads((out/'glrd-shell-g3-download.json').read_text())
           assert r['status']=='PASS',r
           assert r['observed']['preview']['branchRows']==30,r['observed']
           assert r['observed']['preview']['dtxrRatingAction'],r['observed']
-          assert r['download']['bytes']>1000
-          expected='f00da45caf73b15e930e4c91d068d8d1bebd1b9ad1452ad0d7b204af9c3a8aa2'
-          print('Actual downloaded XML',r['download'])
-          assert r['download']['sha256']==expected,'Actual downloaded XML differs from pinned service oracle'
-          assert r['download']['bytes']==820150,'Unexpected downloaded XML size'
+          baseline=(out/'baseline-enriched.xml').read_bytes()
+          downloaded=(out/'downloads'/r['download']['name']).read_bytes()
+          sha=lambda data:hashlib.sha256(data).hexdigest()
+          assert sha(downloaded)==r['download']['sha256']
+          n=min(len(baseline),len(downloaded))
+          first_diff=next((i for i in range(n) if baseline[i]!=downloaded[i]),None)
+          if first_diff is None and len(baseline)!=len(downloaded):first_diff=n
+          context=lambda data: data[max(0,first_diff-90):first_diff+140].decode('utf-8',errors='replace') if first_diff is not None else ''
+          comparison={
+            'identical':baseline==downloaded,
+            'baseline':{'bytes':len(baseline),'sha256':sha(baseline)},
+            'download':{'filename':r['download']['name'],'bytes':len(downloaded),'sha256':sha(downloaded)},
+            'firstDifferentByteOffset':first_diff,
+            'baselineContext':context(baseline),
+            'downloadContext':context(downloaded),
+            'scope':'Actual standalone shell-driven downloaded bytes versus pinned direct browser Run service, with masterContext seeded from constructed config',
+          }
+          (out/'download-vs-service-first-diff.json').write_text(json.dumps(comparison,indent=2)+'\n')
+          print(json.dumps(comparison,indent=2))
+          assert comparison['identical'], 'ENGINEERING/EXPORT PARITY NOT PROVEN: downloaded XML differs; see first difference artifact'
           PY
       - name: Preserve real workbench UI and downloaded XML
         if: always()
