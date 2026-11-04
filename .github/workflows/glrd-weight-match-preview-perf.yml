@@ -263,6 +263,7 @@ jobs:
           node --check converters/xml-cii2019-core/rigid-weight-post-python-reconcile.js
           node --check tabs/xml-cii-2019-standalone/xml-cii-workflow-service.js
           node tests/xml-cii-rigid-post-python-reconcile.test.mjs
+          node tests/xml-cii-rigid-approved-component-conservation.test.mjs
           node tests/xml-cii-rigid-no-cii-bypass.test.mjs
           node tests/xml-cii-rigid-post-python-glrd.test.mjs --directory /tmp/glrd-preview/results
           node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-split-rigid-ownership-popup.js
