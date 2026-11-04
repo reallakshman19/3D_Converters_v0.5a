@@ -179,6 +179,26 @@ const expectedPersistedDigest = await digestRigidOwnershipSnapshot({
  supportConfigJson:JSON.stringify(persistent),
  branchSelection:null,options:correctedJob.options,preparedXmlText:nextPrepared,
 });
+const withoutAllocationsDigest=await digestRigidOwnershipSnapshot({
+ sourceId:correctedJob.sourceId,sourceName:correctedJob.sourceName,
+ sourceText:correctedJob.sourceText,stagedJsonText:correctedJob.stagedJsonText,
+ supportConfigJson:JSON.stringify({overrides:{rigidWeight:savedWeights}}),
+ branchSelection:null,options:correctedJob.options,preparedXmlText:nextPrepared,
+});
+const withOverrideInSource=await digestRigidOwnershipSnapshot({
+ sourceId:correctedJob.sourceId,sourceName:correctedJob.sourceName,
+ sourceText:correctedJob.sourceText,stagedJsonText:correctedJob.stagedJsonText,
+ supportConfigJson:'{}',
+ branchSelection:null,options:correctedJob.options,preparedXmlText:nextPrepared,
+});
+console.log('RIGID_SNAPSHOT_DEBUG', JSON.stringify({
+ corrected: corrected.snapshotDigest,
+ persisted: expectedPersistedDigest,
+ withoutAllocations: withoutAllocationsDigest,
+ noOverrides: withOverrideInSource,
+ savedWeights, savedAllocations:Object.keys(savedAllocations),
+ samePrepared: nextPrepared===corrected.xmlText,
+}));
 assert.equal(expectedPersistedDigest,corrected.snapshotDigest,
   'saved numeric overrides and ownership approval must produce the same snapshot SHA-256');
 const rerun=await enforceStandaloneFinalRigidWeightReview({
