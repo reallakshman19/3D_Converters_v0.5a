@@ -291,11 +291,16 @@ export async function enforceStandaloneFinalRigidWeightReview(parity, job, runti
   // The numeric approvals will be saved to config.overrides.rigidWeight after
   // the ownership transaction. Hash that effective future config now so the
   // persisted owner approval still matches the next run of the same XML.
+  // Weight matching may populate transient resolver hints in its working
+  // config. They are NOT input policy and must not make a user approval
+  // impossible to persist or regenerate for identical source and masters.
+  // Reparse the unmodified job config before binding explicit overrides.
+  const pristineJobConfig = JSON.parse(text(job?.supportConfigJson) || '{}');
   const effectiveConfig = {
-    ...config,
+    ...pristineJobConfig,
     overrides: {
-      ...(config.overrides || {}),
-      rigidWeight: { ...(config.overrides?.rigidWeight || {}), ...permitted },
+      ...(pristineJobConfig.overrides || {}),
+      rigidWeight: { ...(pristineJobConfig.overrides?.rigidWeight || {}), ...permitted },
     },
   };
   const finalSnapshotDigest = await digestRigidOwnershipSnapshot({
