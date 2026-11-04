@@ -49,3 +49,66 @@ test('R4 diagnostics reader retirement: config-save invalidation does not read o
     assert.equal(values.get(ENVELOPE_KEY), OLD_RESULT);
   });
 });
+
+
+test('R4 B31.3 wall-update reader: old bridge cannot supply Preview rows without a current commit', async () => {
+  const { readCommittedPreviewB313Rows, installPreviewB313WallUpdateController } =
+    await import('../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-b313-wall-update.js');
+  await withStorage(async ({ calls, values }) => {
+    assert.deepEqual(readCommittedPreviewB313Rows(), [], 'no implicit persistence fallback');
+    const actionBar = { querySelector: () => null, appendChild() { throw new Error('stale wall action created'); } };
+    const host = { querySelector: (selector) => selector === '[data-mc-preview-build]' ? { parentElement: actionBar } : null };
+    installPreviewB313WallUpdateController({ host, config: {}, xmlText: '<Root/>', options: {} });
+    await Promise.resolve(); // the real controller queues its installation
+    assert.deepEqual(calls.reads, [], 'controller must not read obsolete engineering rows');
+    assert.equal(values.get(OLD_KEY), OLD_RESULT);
+    const fresh = [{ branchName: '/CURRENT/B1', material: '', rating: '600' }];
+    assert.deepEqual(readCommittedPreviewB313Rows({ getCommittedPreviewRows: () => fresh }), fresh);
+    assert.deepEqual(readCommittedPreviewB313Rows({ getCommittedPreviewRows: () => [] }), []);
+  });
+});
+
+test('R4 B31.3 audit reader: zero input without current commit, not stale persisted rows', async () => {
+  const { installPreviewB313WallUpdateAuditController } =
+    await import('../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-b313-wall-audit-controller.js');
+  await withStorage(async ({ calls, values }) => {
+    const clickListeners = [];
+    const button = {
+      dataset: {},
+      addEventListener(event, callback) {
+        if (event === 'click') clickListeners.push(callback);
+      },
+      disabled: false,
+    };
+    const host = {
+      querySelector: (selector) => selector === '[data-mc-b313-wall-update]' ? button : null,
+    };
+    const reports = [];
+    let currentRows = [];
+    const options = {
+      getCommittedPreviewRows: () => currentRows,
+      onSaveConfig: () => {},
+      onB313WallUpdateReport: (report) => { reports.push(report); },
+    };
+    installPreviewB313WallUpdateAuditController({ host, config: {}, xmlText: '<Root/>', options });
+    await Promise.resolve(); // queued installation in the underlying controller
+    assert.equal(clickListeners.length, 1, 'real audit action must bind its click handler');
+    const click = () => clickListeners[0]({
+      preventDefault() {},
+      stopImmediatePropagation() {},
+    });
+    await click();
+    assert.equal(reports.length, 1);
+    assert.equal(reports[0].summary.inputRows, 0);
+    assert.equal(reports[0].rows[0]?.diagnostics, undefined);
+    assert.equal(reports[0].diagnostics?.[0]?.code, 'B313_PREVIEW_ROWS_UNAVAILABLE');
+
+    currentRows = [{ branchName: '/CURRENT/B1', rating: '600' }];
+    await click();
+    assert.equal(reports.length, 2);
+    assert.equal(reports[1].summary.inputRows, 1);
+    assert.equal(reports[1].rows[0]?.branchName, '/CURRENT/B1');
+    assert.deepEqual(calls.reads, [], 'audit must not read prior-session bridge values');
+    assert.equal(values.get(OLD_KEY), OLD_RESULT);
+  });
+});

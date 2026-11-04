@@ -7,7 +7,6 @@ import {
 import { listPipeWallsForSize } from '../../../converters/pipe-wall-master/index.js';
 import { markAdaptedPreviewOverrideManual } from './xml-cii-adapted-preview-filldown.js';
 import { _xmlCiiFindLineListRow } from './xml-cii-adapted-preview-dryrun-core.js';
-import { XML_CII_PREVIEW_LEGACY_CACHE_KEY } from './xml-cii-adapted-preview-cache-v7.js';
 
 export const B313_PREVIEW_ACTION_LABEL = 'Update wall thickness as per B31.3 Sec II';
 export const B313_PREVIEW_BASIS_SCHEMA = 'xml-cii-b313-preview-design-basis/v2';
@@ -110,12 +109,13 @@ function uniqueBasisGroups(rows, cfg) {
   return [...map.values()];
 }
 
-function readLegacyBranchRows() {
+// Only the active Preview's successfully committed rows are eligible.
+// No restoration or silent fallback to a prior-session bridge payload.
+export function readCommittedPreviewB313Rows(options = {}) {
+  if (typeof options?.getCommittedPreviewRows !== 'function') return [];
   try {
-    const payload = typeof localStorage !== 'undefined'
-      ? JSON.parse(localStorage.getItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY) || 'null')
-      : null;
-    return Array.isArray(payload?.data?.branchRows) ? payload.data.branchRows : [];
+    const rows = options.getCommittedPreviewRows();
+    return Array.isArray(rows) ? rows.filter((row) => row && typeof row === 'object') : [];
   } catch {
     return [];
   }
@@ -558,7 +558,7 @@ export function buildPreviewB313WallUpdateReport({ rows, config, xmlText, host }
 }
 
 function installAction(host, config, xmlText, options) {
-  const rows = readLegacyBranchRows();
+  const rows = readCommittedPreviewB313Rows(options);
   const buildButton = host?.querySelector?.('[data-mc-preview-build]');
   const actionBar = buildButton?.parentElement;
   if (!actionBar || !rows.length) return;
@@ -575,7 +575,7 @@ function installAction(host, config, xmlText, options) {
   button.addEventListener('click', async () => {
     button.disabled = true;
     try {
-      const currentRows = readLegacyBranchRows();
+      const currentRows = readCommittedPreviewB313Rows(options);
       const report = buildPreviewB313WallUpdateReport({ rows: currentRows, config, xmlText, host });
       await options?.onSaveConfig?.(config);
       await options?.onB313WallUpdateReport?.(report);

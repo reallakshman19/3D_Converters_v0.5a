@@ -3,8 +3,8 @@ import {
   B313_PREVIEW_REPORT_SCHEMA,
   buildPreviewB313WallUpdateReport,
   installPreviewB313WallUpdateController,
+  readCommittedPreviewB313Rows,
 } from './xml-cii-adapted-preview-b313-wall-update.js';
-import { XML_CII_PREVIEW_LEGACY_CACHE_KEY } from './xml-cii-adapted-preview-cache-v7.js';
 
 function text(value) {
   return value === undefined || value === null ? '' : String(value).trim();
@@ -37,21 +37,6 @@ function compact(value, digits = 4) {
 
 function normalizeRows(rows) {
   return Array.isArray(rows) ? rows.filter((row) => row && typeof row === 'object') : [];
-}
-
-function snapshotRows(rows) {
-  return normalizeRows(rows).map((row) => ({ ...row }));
-}
-
-function readLegacyBranchRows() {
-  try {
-    const payload = typeof localStorage !== 'undefined'
-      ? JSON.parse(localStorage.getItem(XML_CII_PREVIEW_LEGACY_CACHE_KEY) || 'null')
-      : null;
-    return normalizeRows(payload?.data?.branchRows);
-  } catch {
-    return [];
-  }
 }
 
 export function selectPreviewB313AuditRows(snapshot = [], live = []) {
@@ -196,7 +181,7 @@ function renderReport(host, report) {
   actionBar?.parentElement?.insertAdjacentHTML?.('afterend', renderPreviewB313WallAuditHtml(report));
 }
 
-function bindAuditButton(host, config, xmlText, options, getSnapshotRows) {
+function bindAuditButton(host, config, xmlText, options) {
   const button = host?.querySelector?.('[data-mc-b313-wall-update]');
   if (!button || button.dataset.mcB313AuditV2Bound === 'true') return;
   button.dataset.mcB313AuditV2Bound = 'true';
@@ -204,8 +189,8 @@ function bindAuditButton(host, config, xmlText, options, getSnapshotRows) {
     event.preventDefault();
     event.stopImmediatePropagation();
     button.disabled = true;
-    const liveRows = readLegacyBranchRows();
-    const rows = selectPreviewB313AuditRows(getSnapshotRows(), liveRows);
+    // A missing/in-progress Preview is NOT replaced with stale retained rows.
+    const rows = readCommittedPreviewB313Rows(options);
     try {
       const report = rows.length
         ? buildPreviewB313WallUpdateReport({ rows, config, xmlText, host })
@@ -241,11 +226,8 @@ export function installPreviewB313WallUpdateAuditController({ host, config, xmlT
   installPreviewB313WallUpdateController({ host, config, xmlText, options });
 
   host.__xmlCiiB313WallAuditObserver?.disconnect?.();
-  let retainedRows = snapshotRows(readLegacyBranchRows());
   const refresh = () => {
-    const liveRows = readLegacyBranchRows();
-    if (liveRows.length) retainedRows = snapshotRows(liveRows);
-    bindAuditButton(host, config, xmlText, options, () => retainedRows);
+    bindAuditButton(host, config, xmlText, options);
   };
   refresh();
   if (typeof MutationObserver !== 'undefined') {

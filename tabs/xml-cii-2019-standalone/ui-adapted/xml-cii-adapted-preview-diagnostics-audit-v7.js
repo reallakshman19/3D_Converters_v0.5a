@@ -57,7 +57,17 @@ export async function renderStandalonePreviewReportPanel(card, stateRef, render)
     }
   };
 
+  // B31.3 actions consume only the current successful direct Preview commit.
+  // This is an in-memory handoff, never a persisted or reusable cache.
+  let committedPreviewRows = [];
   const options = {
+    onPreviewStarted: () => { committedPreviewRows = []; },
+    onPreviewCommitted: ({ branchRows }) => {
+      committedPreviewRows = Array.isArray(branchRows) ? branchRows.map((row) => ({ ...row })) : [];
+    },
+    getCommittedPreviewRows: () => host.dataset.mcPreviewBuildCompleted === 'true'
+      ? committedPreviewRows
+      : [],
     onSaveConfig: (newCfg) => persistConfig(newCfg, { clearPreview: true }),
     onSaveConfigPreservePreview: (newCfg) => persistConfig(newCfg, { clearPreview: false }),
     onB313WallUpdateReport: (report) => {
