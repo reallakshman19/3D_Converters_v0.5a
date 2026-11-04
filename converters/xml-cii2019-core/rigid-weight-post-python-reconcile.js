@@ -1,5 +1,3 @@
-import { auditXmlCiiRigidWeightsForExport } from './rigid-weight-export-audit.js';
-
 const text = (value) => String(value ?? '').trim();
 const ref = (value) => text(value).replace(/^=/, '').replace(/\s+/g, '').toUpperCase();
 const almost = (a, b) => Number.isFinite(a) && Number.isFinite(b)
@@ -15,7 +13,9 @@ function parsePoint(value) {
 }
 function samePoint(left, right) {
   const a = parsePoint(left), b = parsePoint(right);
-  return !!a && !!b && a.every((x, i) => almost(x, b[i]));
+  // Both sides parse the same prepared XML decimal coordinates; any edit
+  // by Python must invalidate owner custody, even below a length threshold.
+  return !!a && !!b && a.every((x, i) => x === b[i]);
 }
 function xmlChild(node, name) {
   return [...(node?.childNodes || [])].find((child) =>
@@ -37,14 +37,22 @@ function preparedOwners(preparedXmlText) {
       node.nodeType === 1 && String(node.localName || node.nodeName).replace(/^.*:/, '') === 'Node');
     nodes.forEach((node, nodeOrdinal) => {
       const raw = childText(node, 'Weight');
+      const predecessor = nodes[nodeOrdinal - 1] || null;
+      const type = childText(node, 'ComponentType').toUpperCase();
+      const rigid = childText(node, 'Rigid');
+      const validRigidEdge = nodeOrdinal > 0
+        && (Number(rigid) === 2
+          || (Number(childText(predecessor, 'Rigid')) === 2 && type === 'FLAN'));
       const massKg = raw === '' ? null : Number(raw.replace(/,/g, ''));
       rows.push({
         branchName, branchOrdinal, nodeOrdinal,
         nodeNumber: childText(node, 'NodeNumber'),
         endpoint: childText(node, 'Endpoint'),
-        componentType: childText(node, 'ComponentType').toUpperCase(),
+        componentType: type, rigidFlag: rigid,
+        prePythonRigidCandidate: validRigidEdge,
         componentRefNo: ref(childText(node, 'ComponentRefNo')),
         position: childText(node, 'Position'),
+        rawWeight: raw,
         massKg: raw && Number.isFinite(massKg) ? massKg : null,
       });
     });
@@ -102,8 +110,10 @@ export async function reconcileFinalPythonRigidWeights({
     throw new Error('CII RIGID auxiliary count does not match Python emission ledger.');
   }
   const owners = preparedOwners(reviewedXmlText);
-  const preAudit = auditXmlCiiRigidWeightsForExport(reviewedXmlText, { kgToNewton });
-  const positiveOwners = (preAudit.allRows || []).filter((row) => row.ownerWeightState === 'POSITIVE');
+  // Use occurrence IDs rather than Branchname/NodeNumber/ComponentRefNo:
+  // those human identifiers can legitimately repeat across multiple branches.
+  const positiveOwners = owners.filter((owner) =>
+    owner.prePythonRigidCandidate && owner.massKg !== null && owner.massKg > 0);
   const matchedPositives = new Set();
   let zeroEdges = 0;
   let positiveEdges = 0;
@@ -113,31 +123,53 @@ export async function reconcileFinalPythonRigidWeights({
     }
     const emitted = Number(row.emittedCiiMass);
     const mass = Number(row.massKg);
+    // The converter serializes weights with six significant digits for
+    // ordinary values and six decimals in exponential notation otherwise.
+    // Rounding is not a physical weight change. Check both the Python-
+    // computed serialized value and the exact pre-serialization kg mass.
+    const expected = Number(row.expectedCiiMass);
+    const rawScaled = mass * scale;
+    const magnitude = Math.abs(rawScaled);
+    const precision = magnitude >= 1e9 || magnitude < 0.1 ? 7 : 6;
+    const ciiUlp = magnitude > 0
+      ? 10 ** (Math.floor(Math.log10(magnitude)) - precision + 1)
+      : 0;
+    const roundoff = magnitude > 0 ? 0.500001 * ciiUlp + magnitude * 1e-12 : 0;
     if (!Number.isFinite(mass) || mass < 0 || !Number.isFinite(emitted)
-      || !almost(emitted, records[index]) || !almost(emitted, mass * scale)) {
+      || !Number.isFinite(expected) || !almost(emitted, records[index])
+      || !almost(emitted, expected)
+      || (magnitude > 0 && emitted === 0)
+      || Math.abs(emitted - rawScaled) > roundoff) {
       throw new Error(`Python RIGID auxiliary ${index + 1} has an invalid or inconsistent mass.`);
+    }
+    // All emitted auxiliaries (including explicit zero non-owners) must be
+    // traceable to their exact prepared-XML node and predecessor occurrences.
+    const owner = owners.find((candidate) =>
+      candidate.branchOrdinal === Number(row.branchOccurrence)
+      && candidate.nodeOrdinal === Number(row.toNodeOccurrence));
+    const predecessor = owners.find((candidate) =>
+      candidate.branchOrdinal === Number(row.branchOccurrence)
+      && candidate.nodeOrdinal === Number(row.fromNodeOccurrence));
+    const exactOwner = owner && predecessor
+      && owner.branchName === row.branchName
+      && owner.nodeNumber === String(row.toNode)
+      && predecessor.nodeNumber === String(row.fromNode)
+      && owner.componentRefNo === ref(row.componentRefNo)
+      && owner.componentType === text(row.toComponentType).toUpperCase()
+      && predecessor.componentType === text(row.fromComponentType).toUpperCase()
+      && (owner.endpoint || '') === (row.toEndpoint == null ? '' : String(row.toEndpoint))
+      && samePoint(owner.position, row.toPosition)
+      && samePoint(predecessor.position, row.fromPosition)
+      && owner.massKg === mass;
+    if (!exactOwner) {
+      throw new Error(`Python RIGID edge ${row.fromNode} → ${row.toNode} lacks one exact approved source owner/mass. ` +
+        'Python may have changed the geometry, component assignment, node identity or weight.');
+    }
+    if (!owner.prePythonRigidCandidate) {
+      throw new Error(`Python added an unreviewed RIGID edge ${row.fromNode} → ${row.toNode} after approval.`);
     }
     if (mass === 0) { zeroEdges++; continue; }
     positiveEdges++;
-    const matches = owners.filter((owner) =>
-      owner.branchName === row.branchName
-      && owner.nodeNumber === String(row.toNode)
-      && owner.componentRefNo === ref(row.componentRefNo)
-      && owner.componentType === text(row.toComponentType).toUpperCase()
-      && (owner.endpoint || '') === (row.toEndpoint == null ? '' : String(row.toEndpoint))
-      && samePoint(owner.position, row.toPosition));
-    if (matches.length !== 1 || !almost(matches[0].massKg, mass)) {
-      throw new Error(`Positive Python RIGID edge ${row.fromNode} → ${row.toNode} lacks one exact approved source owner/mass. ` +
-        'Python may have changed the geometry, component assignment, node identity or weight.');
-    }
-    const owner = matches[0];
-    const preMatch = positiveOwners.filter((entry) =>
-      entry.branchName === row.branchName && entry.toNode === String(row.toNode)
-      && ref(entry.componentRefNo) === ref(row.componentRefNo)
-      && almost(entry.massKg, mass));
-    if (preMatch.length !== 1) {
-      throw new Error(`Positive RIGID mass ${row.fromNode} → ${row.toNode} has no unique pre-Python exported owner edge.`);
-    }
     const key = `${owner.branchOrdinal}:${owner.nodeOrdinal}`;
     if (matchedPositives.has(key)) {
       throw new Error(`Physical RIGID owner ${key} was emitted more than once; CII duplicated component mass.`);
