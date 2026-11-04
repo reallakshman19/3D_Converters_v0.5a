@@ -48,5 +48,54 @@ await assert.rejects(verify({reviewedXmlText:duplicate}),/one exact approved sou
 const lost={...ledger,rows:[{...ledger.rows[0],massKg:0,emittedCiiMass:0,weightState:'ZERO'},
   {...ledger.rows[1],massKg:0,emittedCiiMass:0,weightState:'ZERO'}],summary:{...ledger.summary,positiveCount:0,zeroCount:2}};
 const CII_ZERO=CII.replace('150','0');
-await assert.rejects(verify({ciiText:CII_ZERO,rigidLedger:{...lost,ciiSha256:await digest(CII_ZERO)}}),/mass lost|one exact approved source owner/);
+await assert.rejects(verify({ciiText:CII_ZERO,rigidLedger:{...lost,ciiSha256:await digest(CII_ZERO)}}),/inconsistent mass|mass lost|one exact approved source owner/);
+
+// CII values are serialized by the Python converter with six significant
+// digits. Fractional component weights must not be rejected due solely to
+// harmless CII text rounding; source kg must still match exactly.
+const fractionalKg = 123.974123;
+const fractionalCii = CII.replace('150 0', '1239.74 0');
+const fractionalLedger = {...ledger,
+  ciiSha256:await digest(fractionalCii),
+  rows:[ledger.rows[0], {...ledger.rows[1],massKg:fractionalKg,
+    expectedCiiMass:1239.74,emittedCiiMass:1239.74}],
+};
+const fractionXml = XML.replace('<Weight>15</Weight>', '<Weight>123.974123</Weight>');
+const fractionResult=await verify({
+  ciiText:fractionalCii,reviewedXmlText:fractionXml,rigidLedger:fractionalLedger,
+});
+assert.equal(fractionResult.positiveEdges,1);
+await assert.rejects(verify({
+  ciiText:fractionalCii, reviewedXmlText:fractionXml,
+  rigidLedger:{...fractionalLedger,rows:[ledger.rows[0],
+    {...fractionalLedger.rows[1],massKg:fractionalKg + 0.0000001}]},
+}), /exact approved source owner/);
+await assert.rejects(verify({
+  ciiText:fractionalCii,reviewedXmlText:fractionXml,
+  rigidLedger:{...fractionalLedger,rows:[ledger.rows[0],
+    {...fractionalLedger.rows[1],expectedCiiMass:1239.75}]},
+}), /inconsistent mass/);
+
+// Identical Branchname / NodeNumber / ComponentRefNo can exist in separate
+// physical source occurrences. Verified ordinals keep these independent.
+const sameNamedBranch=XML.match(/<Branch>[\s\S]*?<\/Branch>/)?.[0];
+assert.ok(sameNamedBranch);
+const repeatedSource=XML.replace('</Pipe>',sameNamedBranch+'</Pipe>');
+const repeatedCii=CII.replace('150 0\n#$ EXPJT','150 0\n0 0\n150 0\n#$ EXPJT');
+const repeatedLedger={...ledger,ciiSha256:await digest(repeatedCii),
+  summary:{...ledger.summary,rigidAuxCount:4,positiveCount:2,zeroCount:2},
+  rows:[...ledger.rows,...ledger.rows.map((row,i)=>({
+    ...row,branchOccurrence:1,rigidAuxIndex:i+3,edgeIndex:i+3,
+  }))],
+};
+const repeated=await verify({
+  reviewedXmlText:repeatedSource,ciiText:repeatedCii,rigidLedger:repeatedLedger,
+});
+assert.equal(repeated.sourceOwnersReconciled,2);
+await assert.rejects(verify({
+  rigidLedger:{...ledger,rows:[{...ledger.rows[0],toNodeOccurrence:90},ledger.rows[1]]},
+}),/exact approved source owner/);
+await assert.rejects(verify({
+  rigidLedger:{...ledger,rows:[{...ledger.rows[0],toPosition:[88.9,0,0]},ledger.rows[1]]},
+}),/exact approved source owner/);
 console.log('POST_PYTHON_RIGID_CII_OWNERSHIP_RECONCILE_PASS');
