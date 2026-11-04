@@ -8,6 +8,8 @@ import { applyXmlCiiOutsideDiameterResolver } from '../../../converters/xml-cii2
 import { applyXmlCiiSplitRigidWeightPropagation } from '../../../converters/xml-cii2019-core/split-rigid-weight-propagation.js?v=20260708-split-weight-1';
 import { digestRigidOwnershipSnapshot } from '../../../converters/xml-cii2019-core/rigid-weight-snapshot.js';
 import { reconcileFinalPythonRigidWeights } from '../../../converters/xml-cii2019-core/rigid-weight-post-python-reconcile.js';
+import { enforceStandaloneRigidSplitOwnership } from '../../xml-cii-2019-standalone/xml-cii-final-rigid-weight-review-gate.js';
+import { openStandaloneRigidSplitOwnershipPopup } from '../../xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-split-rigid-ownership-popup.js';
 import { buildXmlCiiTopologyDisconnectAudit } from '../../../converters/xml-cii2019-core/topology/xml-cii-topology-disconnect-audit.js?v=20260708-topology-1';
 import { buildXmlCiiNodeResolverIndex } from '../../../converters/xml-cii2019-core/sideload-resolver.js';
 import { resolveManualRestraintRows } from '../../../converters/xml-cii2019-core/sideload-restraints.js';
@@ -57,6 +59,60 @@ export async function reconcileModelConvertersPythonRigidResponse(xmlText, respo
     kgToNewton: options.kgToNewton !== false,
   });
   return { verification: verified, ledger, cii: cii[0] };
+}
+
+/**
+ * Shared mandatory physical split-owner gate for Model Converters.
+ *
+ * Approval is bound to the FINAL bytes sent to Python, not an earlier
+ * partially enriched XML or a CII inference. A successful A1/A2 estimate
+ * is never treated as a physical mass allocation.
+ */
+export async function enforceModelConvertersRigidOwnership({
+  xmlText, sourceText, sourceName, sourceId, stagedJsonText = '',
+  config = {}, options = {}, branchSelection = null,
+} = {}, runtime = {}) {
+  const effectiveSourceId = String(sourceId || sourceName || '');
+  const effectiveName = String(sourceName || '');
+  if (!effectiveSourceId || !xmlText || !sourceText) {
+    throw new Error('Model Converters RIGID ownership requires a named source and final Python XML.');
+  }
+  const snapshotDigest = await digestRigidOwnershipSnapshot({
+    sourceId: effectiveSourceId,
+    sourceName: effectiveName,
+    sourceText,
+    stagedJsonText,
+    supportConfigJson: JSON.stringify(config),
+    branchSelection,
+    options,
+    preparedXmlText: xmlText,
+  });
+  const popup = runtime.reviewSplitRigidOwnership ||
+    (typeof document !== 'undefined' ? openStandaloneRigidSplitOwnershipPopup : null);
+  const verdict = await enforceStandaloneRigidSplitOwnership(
+    xmlText,
+    { sourceId: effectiveSourceId, sourceName: effectiveName },
+    config,
+    {
+      ...(popup ? { reviewSplitRigidOwnership: (groups, details) => popup(groups, details) } : {}),
+      onSplitRigidOwnershipApproved: runtime.onSplitRigidOwnershipApproved,
+    },
+    snapshotDigest,
+  );
+  if (!verdict.ok) {
+    throw new Error('Model Converters RIGID ownership not approved: ' + verdict.error);
+  }
+  if (Object.keys(verdict.approvedAllocations || {}).length) {
+    config.rigidOwnership = {
+      ...(config.rigidOwnership || {}),
+      allocations: {
+        ...(config.rigidOwnership?.allocations || {}),
+        ...verdict.approvedAllocations,
+      },
+    };
+  }
+  return { snapshotDigest, splitCustody: verdict.splitCustody,
+    approvedAllocations: verdict.approvedAllocations || {} };
 }
 
 function parseSupportConfig(options = {}) { try { const parsed = JSON.parse(options.supportConfigJson || '{}'); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; } }
@@ -218,18 +274,22 @@ export async function run(context) {
   const runValues = context.options || {};
   const stem = baseNameWithoutExtension(primary.name);
   if (runValues.createEnrichedXml === false) {
-    // Direct XML->Python mode must not bypass structural RIGID split validation.
+    // Direct worker mode must satisfy the same engineer-approved split owner
+    // contract as standalone CII; a sole positive node is not approval.
     const directConfig = parseSupportConfig(runValues);
-    const directCustody = applyXmlCiiSplitRigidWeightPropagation(originalXmlText, {
-      sourceId: runValues.sourceId || primary.name || '',
-      ownershipAllocations: directConfig?.rigidOwnership?.allocations || {},
-      requireAllocation: directConfig?.rigidOwnership?.requireAllocation === true,
+    const directOwnership = await enforceModelConvertersRigidOwnership({
+      xmlText: originalXmlText,
+      sourceText: originalXmlText,
+      sourceName: primary.name,
+      sourceId: runValues.sourceId || primary.name,
+      stagedJsonText,
+      config: directConfig,
+      options: runValues,
+      branchSelection: runValues.branchSelection || null,
+    }, {
+      reviewSplitRigidOwnership: runValues.openXmlCiiSplitRigidOwnershipPopup,
+      onSplitRigidOwnershipApproved: runValues.saveXmlCiiRigidOwnershipAllocations,
     });
-    if (directCustody.ownershipIssues?.length) {
-      const first = directCustody.ownershipIssues[0];
-      throw new Error('Direct Python export blocked: unresolved RIGID split mass ownership at ' +
-        first.branchName + ' / ' + first.componentRefNo + ' (' + first.reason + ').');
-    }
     if (!context.workerRunner) throw new Error('Python worker runtime is not available.');
     context.setStatus?.('Starting Python worker...', 'running');
     const serializableOptions = Object.fromEntries(Object.entries(runValues).filter(([, v]) => typeof v !== 'function'));
@@ -300,14 +360,9 @@ export async function run(context) {
   enriched.splitRigidOwnershipLedger = splitWeightPropagation.componentLedger || [];
   // Structural observations matter even when no XML weights were rewritten.
   enriched.diagnostics.push(...(splitWeightPropagation.diagnostics || []));
-  if (splitWeightPropagation.ownershipIssues?.length) {
-    const first = splitWeightPropagation.ownershipIssues[0];
-    throw new Error(
-      `RIGID physical mass ownership unresolved for ${splitWeightPropagation.ownershipIssues.length} split component group(s). ` +
-      `Example: ${first.branchName} / ${first.componentRefNo}, ${first.reason}. ` +
-      'CII export blocked; correct the component ownership rather than copying weights to siblings.'
-    );
-  }
+  // This early assessment is diagnostic only. An approved allocation may
+  // be supplied or reviewed AFTER the final sideload and XML sanitization.
+  // Only that final, snapshot-bound approval can authorize Python release.
   if (splitWeightPropagation.appliedCount > 0) {
     enriched.xmlText = splitWeightPropagation.xmlText;
     enriched.stats.weightAnnotations = (enriched.stats.weightAnnotations || 0) + splitWeightPropagation.appliedCount;
@@ -342,6 +397,25 @@ export async function run(context) {
   ensureEnrichedPreviewLedger(enriched);
   const sideloadLogLines = applyOptionalManualSideload(enriched, runValues).stdout;
   enriched.xmlText = sanitizeXmlTemperatureRanges(enriched.xmlText);
+  const finalOwnership = await enforceModelConvertersRigidOwnership({
+    xmlText: enriched.xmlText,
+    sourceText: originalXmlText,
+    sourceName: primary.name,
+    sourceId: runValues.sourceId || primary.name,
+    stagedJsonText,
+    config: enriched.config,
+    options: runValues,
+    branchSelection: runValues.branchSelection || null,
+  }, {
+    reviewSplitRigidOwnership: runValues.openXmlCiiSplitRigidOwnershipPopup,
+    onSplitRigidOwnershipApproved: runValues.saveXmlCiiRigidOwnershipAllocations,
+  });
+  enriched.splitRigidOwnershipLedger = finalOwnership.splitCustody.componentLedger;
+  rigidReviewLogLines.push(
+    'Final engineer-approved RIGID split custody: ' +
+    finalOwnership.splitCustody.componentLedger.filter((row) => row.status === 'VALIDATED').length +
+    ' allocation(s) validated against final Python XML.'
+  );
   const topologyAudit = buildXmlCiiTopologyDisconnectAudit(enriched.xmlText, { config: enriched.config });
   enriched.stats = { ...(enriched.stats || {}), ...(topologyAudit.stats || {}) };
   enriched.diagnostics = Array.isArray(enriched.diagnostics) ? enriched.diagnostics : [];
@@ -364,7 +438,7 @@ export async function run(context) {
     postPython.verification.normalizedZeroEdges + ' normalized zero edge(s).');
   const stats = enriched.stats;
   const diagnostics = enriched.diagnostics;
-  const diagnosticPayload = { rigidPythonOwnershipReconciliation: postPython.verification, rigidOwnershipSnapshotDigest, splitRigidOwnershipLedger: enriched.splitRigidOwnershipLedger || [], generatedAt: new Date().toISOString(), source: 'latest-run', inputName: primary.name, enrichedName, enrichedStageName, topologyName, diagnosticsName: `${stem}_enrichment_diagnostics.json`, stats, diagnostics, matchedFacts: enriched.matchedFacts || [], rejectedFacts: enriched.rejectedFacts || [], topologyAudit };
+  const diagnosticPayload = { rigidPythonOwnershipReconciliation: postPython.verification, rigidOwnershipSnapshotDigest: finalOwnership.snapshotDigest, splitRigidOwnershipLedger: enriched.splitRigidOwnershipLedger || [], generatedAt: new Date().toISOString(), source: 'latest-run', inputName: primary.name, enrichedName, enrichedStageName, topologyName, diagnosticsName: `${stem}_enrichment_diagnostics.json`, stats, diagnostics, matchedFacts: enriched.matchedFacts || [], rejectedFacts: enriched.rejectedFacts || [], topologyAudit };
   const enrichedStageText = JSON.stringify(buildEnrichedStageJson(enriched.xmlText, diagnosticPayload), null, 2);
   const topologyText = JSON.stringify(topologyAudit, null, 2);
   const rigidWeightAuditText = JSON.stringify({
