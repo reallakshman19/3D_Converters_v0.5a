@@ -44,6 +44,23 @@ jobs:
           print('GLRD_ALL_ACTUAL_PYTHON_RIGID_AUX_RECONCILED', json.dumps(manifest['summary']))
           PY
           sha256sum /tmp/glrd-preview/results/GLRD-enriched.xml /tmp/glrd-preview/results/GLRD.cii
+      - name: Model Converters contracted Python CII and exact RIGID ledger
+        run: |
+          set -euo pipefail
+          python3 converters/scripts/xml_to_cii2019_contracted_direction.py \
+            --input /tmp/glrd-preview/results/GLRD-enriched.xml \
+            --output /tmp/glrd-preview/results/GLRD-contracted.cii \
+            --weight-scale 10 --coords-mode first --split-condensed-valve-flange
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          p=Path('/tmp/glrd-preview/results')
+          text=(p/'GLRD-contracted.cii').read_text()
+          ledger=json.loads((p/'GLRD-contracted.rigid_ledger.json').read_text())
+          assert ledger['ciiSha256']==hashlib.sha256(text.encode()).hexdigest()
+          assert ledger['summary']['rigidAuxCount']==len(ledger['rows'])
+          print('MODEL_CONVERTERS_CONTRACTED_RIGID_LEDGER',json.dumps(ledger['summary']))
+          PY
       - name: Weight Match profiling with real GLRD / master
         run: |
           set -euo pipefail
@@ -180,16 +197,18 @@ jobs:
           node tests/xml-cii-rigid-post-python-reconcile.test.mjs
           node tests/xml-cii-rigid-no-cii-bypass.test.mjs
           node tests/xml-cii-rigid-post-python-glrd.test.mjs --directory /tmp/glrd-preview/results
+          node tests/xml-cii-rigid-contracted-glrd.test.mjs /tmp/glrd-preview/results
           node tests/xml-cii-rigid-ownership-snapshot.test.mjs
           node tests/xml-cii-rigid-direct-worker-gate.test.mjs
           node --check converters/xml-cii2019-core/split-rigid-weight-propagation.js
           node --check tabs/model-converters/converters/xmltocii2019_runner.js
+          node --check converters/py-worker.js
           node tests/xml-cii-final-weight-audit.test.mjs
           node tests/xml-cii-output-empirical-review.test.mjs
           node tests/xml-cii-standalone-final-rigid-review-e2e.test.mjs
           node tests/xml-cii-mode-a-consolidated-rigid-review.test.mjs
           node tests/xml-cii-preview-run-parity-closure.test.mjs
-          python3 -m py_compile converters/scripts/xml_to_cii2019.py converters/scripts/xml_to_cii2019_runtime_custody.py converters/scripts/xml_to_cii2019_rigid_ledger.py
+          python3 -m py_compile converters/scripts/xml_to_cii2019.py converters/scripts/xml_to_cii2019_runtime_custody.py converters/scripts/xml_to_cii2019_rigid_ledger.py converters/scripts/xml_to_cii2019_contracted_direction.py
           python3 tests/xml-cii-rigid-python-emission-ledger.test.py
           python3 tests/xml-cii-runtime-custody.test.py
       - name: Upload raw baseline enriched XML, CII and Weight Match profile
