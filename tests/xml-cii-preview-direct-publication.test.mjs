@@ -8,6 +8,7 @@ import { xmlCiiBuildAndRenderPreview as buildLegacyPreview } from '../tabs/xml-c
 import { xmlCiiBuildAndRenderPreview as buildV7Preview } from '../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer-v7.js';
 import {
   clearXmlCiiPreviewRatingSnapshot,
+  publishXmlCiiPreviewRatingSnapshot,
   readXmlCiiPreviewRatingSnapshot,
   resolveXmlCiiWeightMatchRating,
 } from '../converters/xml-cii2019-core/preview-rating-snapshot.js';
@@ -309,4 +310,148 @@ test('discarded host cannot publish when asynchronous source resolution complete
   assert.equal(commits, 0);
   assert.equal(readXmlCiiPreviewRatingSnapshot().records.length, 0);
   assert.equal(host.dataset.mcPreviewBuildCompleted, 'false');
+});
+
+
+test('generation :257 — stale A finishing after B must not recalculate or publish', async () => {
+  resetSnapshot();
+  const { root, host } = makeRoot();
+  const staleSource = deferred();
+  const aConfig = makeConfig();
+  let aCalculations = 0;
+  Object.defineProperty(aConfig, 'shortElementLengthDropThresholdMm', {
+    get() {
+      // The real dry-run reads this field during calculation. An obsolete
+      // source must be rejected at :257 before any recalculation can occur.
+      aCalculations += 1;
+      return 6;
+    },
+  });
+  const oldResults = [];
+  const aJob = buildLegacyPreview(root, XML, aConfig, options({
+    resolveStagedJsonText: () => staleSource.promise,
+    onPreviewCommitted: (result) => {
+      oldResults.push(result);
+      publishXmlCiiPreviewRatingSnapshot(result.branchRows);
+    },
+  }));
+
+  const newResults = [];
+  const bConfig = makeConfig();
+  bConfig.overrides.rating['/REG/B1'] = '600';
+  await buildLegacyPreview(root, XML, bConfig, options({
+    stagedSourceLabel: 'newer-B',
+    onPreviewCommitted: (result) => {
+      newResults.push(result);
+      publishXmlCiiPreviewRatingSnapshot(result.branchRows);
+    },
+  }));
+  assert.equal(newResults.length, 1, 'newer B must actually commit first');
+  assert.equal(readXmlCiiPreviewRatingSnapshot().records[0].rating, '600');
+  const revisionB = readXmlCiiPreviewRatingSnapshot().revision;
+
+  staleSource.resolve({ text: '{}', label: 'older-A' });
+  await aJob; // A finishes AFTER B, exercising the real legacy :257 guard.
+  assert.equal(aCalculations, 0, 'superseded A must not enter the calculator');
+  assert.equal(oldResults.length, 0, 'superseded A must not publish');
+  assert.equal(readXmlCiiPreviewRatingSnapshot().revision, revisionB);
+  assert.match(host.textContent, /newer-B/);
+  assert.doesNotMatch(host.textContent, /older-A/);
+});
+
+test('generation :259 — a newer request during the synchronous dry-run blocks obsolete rendering', async () => {
+  resetSnapshot();
+  const { root, host } = makeRoot();
+  const newSource = deferred();
+  const aConfig = makeConfig();
+  const bConfig = makeConfig();
+  bConfig.overrides.rating['/REG/B1'] = '600';
+  let bJob;
+  let bRequested = 0;
+  const oldResults = [];
+  const newResults = [];
+
+  Object.defineProperty(aConfig, 'shortElementLengthDropThresholdMm', {
+    get() {
+      if (bRequested++ === 0) {
+        // This getter runs inside the production calculation, after :257
+        // and before :259. Request B while A is still calculating.
+        bJob = buildLegacyPreview(root, XML, bConfig, options({
+          resolveStagedJsonText: () => newSource.promise,
+          onPreviewCommitted: (result) => {
+            newResults.push(result);
+            publishXmlCiiPreviewRatingSnapshot(result.branchRows);
+          },
+        }));
+      }
+      return 6;
+    },
+  });
+  await buildLegacyPreview(root, XML, aConfig, options({
+    stagedSourceLabel: 'obsolete-A',
+    onPreviewCommitted: (result) => { oldResults.push(result); },
+  }));
+  assert.ok(bRequested > 0, 'B must have been requested from inside the real calculator');
+  assert.ok(bJob, 'B must be an actual pending Preview generation');
+  assert.equal(
+    host.querySelector('[data-resizable-table="branch-preview"]'),
+    null,
+    'A must not render an obsolete table while B waits for source resolution',
+  );
+  assert.equal(oldResults.length, 0);
+
+  newSource.resolve({ text: '{}', label: 'newer-B' });
+  await bJob;
+  assert.equal(newResults.length, 1);
+  assert.equal(newResults[0].branchRows[0].rating, '600');
+  assert.equal(readXmlCiiPreviewRatingSnapshot().records[0].rating, '600');
+  assert.match(host.textContent, /newer-B/);
+});
+
+test('generation :421 — a newer request during table binding blocks obsolete callback publication', async () => {
+  resetSnapshot();
+  const { root, host } = makeRoot();
+  const newSource = deferred();
+  const originalQueryAll = host.querySelectorAll.bind(host);
+  const bConfig = makeConfig();
+  bConfig.overrides.rating['/REG/B1'] = '600';
+  let bJob;
+  let startedB = false;
+  const oldResults = [];
+  const newResults = [];
+
+  host.querySelectorAll = (selector) => {
+    // The production editable table calls this selector from table.bind().
+    // That occurs AFTER :259 and BEFORE the final commit guard at :421.
+    if (selector === '[data-mc-edit-type]' && !startedB) {
+      startedB = true;
+      bJob = buildLegacyPreview(root, XML, bConfig, options({
+        resolveStagedJsonText: () => newSource.promise,
+        onPreviewCommitted: (result) => {
+          newResults.push(result);
+          publishXmlCiiPreviewRatingSnapshot(result.branchRows);
+        },
+      }));
+    }
+    return originalQueryAll(selector);
+  };
+
+  await buildLegacyPreview(root, XML, makeConfig(), options({
+    stagedSourceLabel: 'obsolete-A',
+    onPreviewCommitted: (result) => {
+      oldResults.push(result);
+      publishXmlCiiPreviewRatingSnapshot(result.branchRows);
+    },
+  }));
+  assert.equal(startedB, true, 'new generation must start inside real table binding');
+  assert.ok(bJob, 'B must be an actual pending Preview generation');
+  assert.equal(oldResults.length, 0, 'obsolete A must not invoke the publication callback at :421');
+  assert.equal(readXmlCiiPreviewRatingSnapshot().records.length, 0);
+
+  newSource.resolve({ text: '{}', label: 'newer-B' });
+  await bJob;
+  assert.equal(newResults.length, 1);
+  assert.equal(newResults[0].branchRows[0].rating, '600');
+  assert.equal(readXmlCiiPreviewRatingSnapshot().records[0].rating, '600');
+  assert.match(host.textContent, /newer-B/);
 });
