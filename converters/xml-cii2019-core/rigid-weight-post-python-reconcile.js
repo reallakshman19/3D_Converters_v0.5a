@@ -117,6 +117,7 @@ export async function reconcileFinalPythonRigidWeights({
   const matchedPositives = new Set();
   let zeroEdges = 0;
   let positiveEdges = 0;
+  let normalizedZeroEdges = 0;
   for (const [index, row] of rigidLedger.rows.entries()) {
     if (row.rigidAuxIndex !== index + 1) {
       throw new Error('Python RIGID auxiliary indices are not one-to-one and sequential.');
@@ -166,7 +167,14 @@ export async function reconcileFinalPythonRigidWeights({
         'Python may have changed the geometry, component assignment, node identity or weight.');
     }
     if (!owner.prePythonRigidCandidate) {
-      throw new Error(`Python added an unreviewed RIGID edge ${row.fromNode} → ${row.toNode} after approval.`);
+      // Python may skip an intervening negative-number FLAN or short node,
+      // turning an existing zero-mass endpoint into a RIGID auxiliary.
+      // This is not an additional physical mass owner. A POSITIVE mass on
+      // such an edge is unreviewed and must still fail closed.
+      if (mass > 0) {
+        throw new Error(`Python added an unreviewed positive RIGID edge ${row.fromNode} → ${row.toNode} after approval.`);
+      }
+      normalizedZeroEdges++;
     }
     if (mass === 0) { zeroEdges++; continue; }
     positiveEdges++;
@@ -186,5 +194,5 @@ export async function reconcileFinalPythonRigidWeights({
   }
   return { ok: true, schema: 'rigid-custody-post-python-reconciliation/v1',
     ciiSha256: actualCiiSha, totalEdges: rigidLedger.rows.length,
-    positiveEdges, zeroEdges, sourceOwnersReconciled: matchedPositives.size };
+    positiveEdges, zeroEdges, normalizedZeroEdges, sourceOwnersReconciled: matchedPositives.size };
 }
