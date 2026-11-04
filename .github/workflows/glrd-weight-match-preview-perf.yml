@@ -175,6 +175,9 @@ jobs:
           node --check tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-events.js
           node tests/xml-cii-rigid-ledger-download.test.mjs
           node tests/xml-cii-rigid-complete-census.test.mjs
+          node --check converters/xml-cii2019-core/rigid-weight-post-python-reconcile.js
+          node --check tabs/xml-cii-2019-standalone/xml-cii-workflow-service.js
+          node tests/xml-cii-rigid-post-python-reconcile.test.mjs
           node tests/xml-cii-rigid-ownership-snapshot.test.mjs
           node tests/xml-cii-rigid-direct-worker-gate.test.mjs
           node --check converters/xml-cii2019-core/split-rigid-weight-propagation.js
