@@ -17,6 +17,10 @@ function sanitizedConfig(raw) {
     clean.rigidOwnership = { ...clean.rigidOwnership };
     delete clean.rigidOwnership.allocations;
     delete clean.rigidOwnership.approvedSnapshotDigest;
+    // Saving a first-time allocation creates rigidOwnership in config.
+    // The empty approval-only container is not a policy change and must not
+    // invalidate its own persisted snapshot on the next identical run.
+    if (!Object.keys(clean.rigidOwnership).length) delete clean.rigidOwnership;
   }
   return clean;
 }
