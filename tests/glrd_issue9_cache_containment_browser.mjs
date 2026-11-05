@@ -118,28 +118,53 @@ const EXPRESSION=String.raw`(async()=>{
   const paddingKey='ui9-unused-'+('Z'.repeat(450));
   config.overrides.rating={[paddingKey]:'unused',...(config.overrides.rating||{})};
   const prev=await import('/tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-dryrun.js');
-  const renderer=await import('/tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer.js');
+  const renderer=await import('/tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer-v7.js');
+  const cache=await import('/tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-cache-v7.js');
+  const rating=await import('/converters/xml-cii2019-core/preview-rating-snapshot.js');
   const root=document.createElement('section');
   root.innerHTML='<div id="mc-preview-table-host"></div>';
   document.body.appendChild(root);
   const host=root.querySelector('#mc-preview-table-host');
-  const keyName='xml-cii-pv-cache-v8-dtxr';
-  localStorage.removeItem(keyName);
+  const keyName=cache.XML_CII_PREVIEW_LEGACY_CACHE_KEY;
+  const envelopeKey=cache.XML_CII_PREVIEW_CACHE_KEY;
+  const assertNoPersistedPreview=(phase)=>{
+    if(localStorage.getItem(keyName)!==null||localStorage.getItem(envelopeKey)!==null)
+      throw Error('Obsolete Preview cache key present after '+phase);
+  };
+  // Pre-seed both retired keys before Build: a stale prior session must be
+  // discarded without ever being promoted to current engineering authority.
+  const priorSession=JSON.stringify({fp:'pv5|stale-prior-session',
+    data:{branchRows:[{branchName:'/STALE/B1',rating:'900'}],nodeRows:[]},ts:1});
+  localStorage.setItem(keyName,priorSession);
+  localStorage.setItem(envelopeKey,priorSession);
   let stagedResolvers=0;
+  let committedResult=null;
+  let publicationCount=0;
+  const assertCurrentRating=(phase,branchName,expectedRating)=>{
+    const rows=committedResult?.branchRows;
+    const snapshot=rating.readXmlCiiPreviewRatingSnapshot();
+    const row=rows?.find(item=>item.branchName===branchName);
+    const record=snapshot.records.find(item=>item.branchName===branchName);
+    if(!Array.isArray(rows)||!rows.length||!snapshot.records.length
+      ||!row||!record||String(row.rating)!==String(expectedRating)
+      ||String(record.rating)!==String(expectedRating))
+      throw Error('Current in-memory Preview Rating mismatch after '+phase);
+    return snapshot.records.length;
+  };
   const options={
     onSaveConfig:()=>{},
     openOverridePopup:()=>{},
     ensureOverrides:c=>{c.overrides=c.overrides||{};return c.overrides;},
     resolveStagedJsonText:async()=>{stagedResolvers++;return {text:staged,label:'pinned-stage'};},
     stagedJsonText:staged,
+    onPreviewCommitted:result=>{committedResult=result;publicationCount++;},
   };
   const start=performance.now();
   await renderer.xmlCiiBuildAndRenderPreview(root,xml,config,{...options,forceBuild:true});
   const firstMs=performance.now()-start;
-  const bridgeAfterBuild=JSON.parse(localStorage.getItem(keyName)||'null');
-  if(bridgeAfterBuild?.fp!=='explicit-preview-build-v1-not-a-reuse-key'
-    ||bridgeAfterBuild?.data?.branchRows?.length!==30)
-    throw Error('No explicit-build handoff for v7 Preview rating authority');
+  assertNoPersistedPreview('initial Build');
+  if(publicationCount!==1||committedResult?.branchRows?.length!==30)
+    throw Error('Initial Build did not publish the direct 30-branch Preview result');
   const initial=prev.xmlCiiDryRunPreview(xml,structuredClone(config),staged);
   if(initial.branchRows.length!==30)throw Error('GLRD branch count changed');
   const index=initial.branchRows.findIndex(row=>row.lineKey&&row.rating&&row.pipingClass);
@@ -151,11 +176,13 @@ const EXPRESSION=String.raw`(async()=>{
   };
   const before=getCell();
   if(before!==String(target.rating))throw Error('Initial UI rating does not match direct Preview: '+before+' vs '+target.rating);
+  assertCurrentRating('initial Build',target.branchName,target.rating);
   // A legacy cache entry is deliberately planted to prove the new renderer
   // cannot silently hydrate stale branch rows, regardless of its old key.
   const oldEntry=JSON.stringify({fp:'pv5|legacy-unverified-input-key',
     data:{branchRows:initial.branchRows,nodeRows:initial.nodeRows},ts:Date.now()});
   localStorage.setItem(keyName,oldEntry);
+  localStorage.setItem(envelopeKey,oldEntry);
   const classKey='PC:'+String(target.pipingClass).toUpperCase().replace(/\s+/g,'');
   const desired=String(target.rating)==='1500'?'900':'1500';
   config.overrides.rating[classKey]=desired;
@@ -170,34 +197,45 @@ const EXPRESSION=String.raw`(async()=>{
   if(!host.querySelector('[data-mc-preview-build]'))throw Error('Fail-closed state lost Build Preview button');
   if(!/Preview has not been built|Click Build Preview/.test(host.textContent))
     throw Error('Renderer did not show safe manual Preview idle state');
-  if(stagedResolvers!==beforeIdleResolutions)throw Error('Idle unexpectedly triggered a Preview source read');
-  if(localStorage.getItem(keyName)!==oldEntry)throw Error('Unexpected persisted legacy cache mutation while idle');
+  // The v7 wrapper resolves source authority on entry, even for manual idle.
+  const afterIdleResolutions=stagedResolvers;
+  if(afterIdleResolutions<=beforeIdleResolutions)
+    throw Error('V7 wrapper did not resolve the staged source at idle entry');
+  assertNoPersistedPreview('manual idle');
+  if(rating.readXmlCiiPreviewRatingSnapshot().records.length!==0)
+    throw Error('Manual idle incorrectly exposed a stale Preview rating');
   const button=host.querySelector('[data-mc-preview-build]');
+  const beforeManualCommit=publicationCount;
+  if(!button)throw Error('Manual Build Preview button missing');
   button.click();
   const clickTime=performance.now();
   await new Promise((resolve,reject)=>{
     function poll(){
-      if(getCell()===String(corrected.rating)){resolve();return;}
+      if(getCell()===String(corrected.rating)
+        &&publicationCount>beforeManualCommit&&host.dataset.mcPreviewBuildCompleted==='true'){
+        resolve();return;
+      }
       if(performance.now()-clickTime>25000){reject(Error('Actual Build button failed to update rating; visible='+getCell()));return;}
       setTimeout(poll,75);
     }
     poll();
   });
-  if(stagedResolvers<=beforeIdleResolutions)throw Error('Build button did not resolve pinned staged source');
-  const finalBridge=JSON.parse(localStorage.getItem(keyName)||'null');
-  if(finalBridge?.fp!=='explicit-preview-build-v1-not-a-reuse-key'
-    ||String(finalBridge?.data?.branchRows?.[index]?.rating)!==String(corrected.rating))
-    throw Error('Actual manual Build did not publish fresh v7 bridge data');
+  if(stagedResolvers<=afterIdleResolutions)
+    throw Error('Build button did not resolve pinned staged source');
+  assertNoPersistedPreview('manual Build');
+  const finalRatingSnapshotCount=assertCurrentRating('manual Build',target.branchName,corrected.rating);
   return {
     status:'PASS',scope:'actual Chromium renderer DOM and button-click; not full app import/navigation',
     realRendererInvoked:true,
     legacyCacheIgnored:true,failClosedIdle:true,manualBuildButtonWorked:true,
-    v7BridgeOnlyAfterExplicitBuild:true,
+    noPersistedPreviewCacheAfterBuild:true,inMemoryRatingPublished:true,
+    finalRatingSnapshotCount,
     actualSourceCommit:location.origin,targetIndex:index,
     branchName:target.branchName,overrideKey:classKey,
     oldRating:String(target.rating),newRating:String(corrected.rating),
     beforeDomRating:before,idleDomRating:getCell()===String(corrected.rating)?null:getCell(),
     finalDomRating:getCell(),resolutionsBeforeIdle:beforeIdleResolutions,
+    resolutionsAfterIdle:afterIdleResolutions,
     resolutionsAfterBuild:stagedResolvers,initialRendererMs:firstMs,
     idleVisitMs:idleMs,manualBuildMs:performance.now()-clickTime,
     branchCount:direct.branchRows.length,oldCacheEntryLength:oldEntry.length
@@ -209,7 +247,7 @@ async function browserCapture(files){
   const pagePort=server.address().port;
   const debugPort=await freePort();
   const profile=await mkdtemp(join(tmpdir(),'glrd-chrome-capture-'));
-  const exe=arg('chromium')||'google-chrome';
+  const exe=arg('chromium')||process.env.CHROME_PATH||'google-chrome';
   let stderr='';
   const chrome=spawn(exe,['--headless=new','--no-sandbox','--disable-gpu','--disable-dev-shm-usage',
     '--disable-background-networking','--no-first-run','--remote-allow-origins=*',
