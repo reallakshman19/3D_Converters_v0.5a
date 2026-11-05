@@ -12,7 +12,7 @@ const LEGACY_KEYS = Object.freeze([
   'xml-cii-pv-cache-v6',
   'xml-cii-pv-cache-v2',
 ]);
-const OLD_ENVELOPE_KEYS = Object.freeze(['xml-cii-pv-cache-v7']);
+const OLD_ENVELOPE_KEYS = Object.freeze(['xml-cii-pv-cache-v7', 'xml-cii-pv-cache-v5']);
 
 function text(value) {
   return value === undefined || value === null ? '' : String(value);

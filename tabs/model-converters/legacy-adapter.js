@@ -72,6 +72,7 @@ import { FileInputCard } from './shared/FileInputCard.js';
 import { FieldMappingTable } from './shared/FieldMappingTable.js';
 import { EditablePreviewTable } from './shared/EditablePreviewTable.js';
 import { xmlCiiRenderPreviewPhase as xmlCiiRenderPreviewPhaseImported, xmlCiiBuildAndRenderPreview as xmlCiiBuildAndRenderPreviewImported, xmlCiiDryRunPreview } from './converters/xmltocii2019_helper/preview-renderer.js';
+import { xmlCiiRenderPreviewPhase as xmlCiiRenderPreviewPhaseV7, xmlCiiBuildAndRenderPreview as xmlCiiBuildAndRenderPreviewV7 } from '../xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer-v7.js';
 import { xmlCiiRenderWeightMatchPhase as xmlCiiRenderWeightMatchPhaseImported, bindXmlCiiWeightMatchPhase as bindXmlCiiWeightMatchPhaseImported } from './converters/xmltocii2019_helper/weight-match-renderer.js';
 import { xmlCiiRenderSupportMapperPhase as xmlCiiRenderSupportMapperPhaseImported, bindXmlCiiSupportMapperPhase as bindXmlCiiSupportMapperPhaseImported } from './converters/xmltocii2019_helper/support-types-panel.js';
 import { extractXmlCiiBranchSample as _extractXmlCiiBranchSample } from './xml-cii-branch-sample-sync.js';
@@ -7823,6 +7824,31 @@ export function renderModelConvertersTab(container) {
     }
   }
 
+  // The unified popup owns a separate connected render root. Route ONLY this
+  // path through the optimized adapted v7 wrapper, never the old pv-cache-v5
+  // renderer. The retired inline shell retains its current implementation.
+  async function xmlCiiInitializePopupPreviewV7(target) {
+    const host = target?.querySelector?.('#mc-preview-table-host');
+    if (!host) return;
+    const xmlFile = xmlCiiCurrentPrimaryFile();
+    if (!xmlFile) return;
+    try {
+      const xmlText = await xmlFile.text();
+      if (!target.isConnected || target.querySelector('#mc-preview-table-host') !== host) return;
+      const config = xmlCiiConfigWithLoadedMasterRows('XML->CII popup v7 preview');
+      await xmlCiiBuildAndRenderPreviewV7(target, xmlText, config, {
+        onSaveConfig: (newConfig) => xmlCiiSaveConfig(newConfig),
+        openOverridePopup: _xmlCiiOpenPreviewOverridePopup,
+        ensureOverrides: xmlCiiEnsureOverrides,
+        resolveStagedJsonText: (nextConfig) => xmlCiiCurrentStagedJsonSource(nextConfig),
+      });
+    } catch (error) {
+      if (target.isConnected && target.querySelector('#mc-preview-table-host') === host) {
+        host.textContent = 'Preview initialization failed: ' + String(error?.message || error);
+      }
+    }
+  }
+
   function _xmlCiiOpenPreviewOverridePopup({ editType, derivedKey, currentVal, config, onSave }) {
     const title = editType === 'pipingClass' ? 'Piping Class Override' : 'Material Code Override';
     const label = editType === 'pipingClass' ? 'Derived class' : 'Material name';
@@ -9736,11 +9762,12 @@ export function renderModelConvertersTab(container) {
       else if (phaseId === 'import-masters') html = xmlCiiRenderImportMastersPhase(proxyRoot);
       else if (phaseId === 'run') html = xmlCiiRenderRunPhase();
       else if (phaseId === 'weight-match') html = xmlCiiRenderWeightMatchPhase();
-      else if (phaseId === 'preview') html = xmlCiiRenderPreviewPhase(proxyRoot);
+      else if (phaseId === 'preview') html = xmlCiiRenderPreviewPhaseV7(xmlCiiCurrentPrimaryFile(), xmlCiiConfigWithLoadedMasterRows('XML->CII popup v7 preview'));
       else if (phaseId === 'diagnostics') html = xmlCiiRenderDiagnosticsPhase();
       else if (phaseId === 'support-mapper') html = xmlCiiRenderSupportMapperPhase();
       else if (phaseId === 'config') html = xmlCiiRenderConfigPhase();
       target.innerHTML = html;
+      if (phaseId === 'preview') void xmlCiiInitializePopupPreviewV7(target);
 
       // Event binding is best-effort: the content is already visible, so a bind
       // failure must never bubble up and freeze the modal. Log and continue.
