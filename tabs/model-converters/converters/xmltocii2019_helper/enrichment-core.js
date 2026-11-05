@@ -1,4 +1,5 @@
 import { parseXmlCiiEnrichmentConfig } from '../../../../converters/xml-cii2019-core/config.js';
+import { resolveXmlCiiNodeBoreFromOutsideDiameter } from '../../../../converters/xml-cii2019-core/od-bore-resolver.js';
 import {
   DEFAULT_PIPING_CLASS_MASTER_URLS,
   loadXmlCiiMaterialMap,
@@ -628,7 +629,12 @@ export async function enrichXmlForCii2019(xmlTextVal, stagedJsonText, options = 
         xmlSetText(document, node, 'Rating', branchRating);
         stats.ratingAnnotations += 1;
       }
-      if (branchBore !== null) xmlSetText(document, node, 'BoreMm', branchBore.toFixed(3));
+      // A branch can contain a reducer. Each node's OutsideDiameter is more
+      // specific than its branch-name nominal bore; preserve the old branch
+      // fallback only when this node has no recognized OD evidence.
+      const nodeBore = resolveXmlCiiNodeBoreFromOutsideDiameter(
+        xmlText(node, 'OutsideDiameter'), branchBore);
+      if (nodeBore != null) xmlSetText(document, node, 'BoreMm', nodeBore.toFixed(3));
       if (lengthMm !== null) xmlSetText(document, node, 'ElementLengthMm', lengthMm.toFixed(3));
 
       if (resolved.wallThicknessMm) {
