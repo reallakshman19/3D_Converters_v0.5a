@@ -35,7 +35,9 @@ test('F1 production Preview and Run both prefer physical node OD', async () => {
   ]);
   assert.match(preview, /const physicalBoreMm = _physicalBranchBoreMm\(branch\)/);
   assert.match(preview, /boreConflict, size:/);
+  assert.match(preview, /reason: 'staged-bore-disagrees-with-physical-evidence'/);
   assert.match(run, /const nodeBore = resolveXmlCiiNodeBoreFromOutsideDiameter\(/);
   assert.doesNotMatch(run, /setText\(document, node, 'BoreMm', Number\(boreMm\)\.toFixed\(3\)\)/);
+  assert.match(adapted, /_branchPhysicalBoreFromNodeOd\(branch\) \|\| _deriveBoreFromBranchName\(branchName, config\)/);
   assert.ok(adapted.indexOf('const od = Number(') < adapted.indexOf("const b = Number(_xmlText(n, 'BoreMm')"), 'OD loop before stored bore fallback');
 });

@@ -278,16 +278,20 @@ export function _branchXmlFallbackFacts(branch) {
   return facts;
 }
 
-export function _branchBoreFromFirstUsefulNode(branch) {
-  // The node's physical OD is authoritative. An older saved BoreMm can be
-  // a stale branch-size copy; use it only when no known node OD is available.
+export function _branchPhysicalBoreFromNodeOd(branch) {
   for (const n of _xmlChildrenByName(branch, 'Node')) {
     const od = Number(_xmlText(n, 'OuterDiameter') || _xmlText(n, 'OutsideDiameter') || _xmlText(n, 'OD'));
     if (Number.isFinite(od) && od > 0) {
-      const d = _nominalDnFromOd(od);
-      if (d && d > 0) return d;
+      const dn = _nominalDnFromOd(od);
+      // Only a recognized nominal DN can override branch-name evidence.
+      if (dn !== od && dn > 0) return dn;
     }
   }
+  return null;
+}
+export function _branchBoreFromFirstUsefulNode(branch) {
+  const physicalBore = _branchPhysicalBoreFromNodeOd(branch);
+  if (physicalBore != null) return physicalBore;
   for (const n of _xmlChildrenByName(branch, 'Node')) {
     const b = Number(_xmlText(n, 'BoreMm') || _xmlText(n, 'Bore'));
     if (Number.isFinite(b) && b > 0) return b;
@@ -439,7 +443,7 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
     const lineListClass = _rowText(lineListMatch, ['pipingClass', 'Piping Class', 'PIPING_CLASS']);
     const branchClass = _derivePipingClassFromBranchName(branchName, config);
     const derivedClassRaw = lineListClass || branchClass;
-    const boreMm = _branchBoreFromFirstUsefulNode(branch) || _deriveBoreFromBranchName(branchName, config) || _rowNumber(lineListMatch, ['convertedBore', 'Bore', 'DN', 'NB']);
+    const boreMm = _branchPhysicalBoreFromNodeOd(branch) || _deriveBoreFromBranchName(branchName, config) || _branchBoreFromFirstUsefulNode(branch) || _rowNumber(lineListMatch, ['convertedBore', 'Bore', 'DN', 'NB']);
     const ratingKeys = _uniqueKeys([lineKey, branchName, derivedClassRaw]);
     const manualRating = _ratingOverride(config, ratingKeys);
     const rowRating = _rowText(lineListMatch, ['rating', 'Rating', 'RATING']);
