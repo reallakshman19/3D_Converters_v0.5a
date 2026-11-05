@@ -11,7 +11,7 @@ import {createServer} from 'node:http';
 import {createServer as createSocketServer} from 'node:net';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {extname, join, resolve, sep} from 'node:path';
+import {dirname, extname, join, resolve, sep} from 'node:path';
 
 const flags=new Map();
 for(let i=2;i<process.argv.length;i+=2) flags.set(process.argv[i],process.argv[i+1]);
@@ -80,7 +80,7 @@ async function browserSocket(port,pagePort){
   }
   throw Error('Chromium DevTools page unavailable');
 }
-async function evaluate(wsUrl,expression){
+async function evaluateOnce(wsUrl,expression){
   const ws=new WebSocket(wsUrl);
   await new Promise((yes,no)=>{ws.onopen=yes;ws.onerror=()=>no(Error('CDP connection failed'));});
   try{
@@ -98,6 +98,24 @@ async function evaluate(wsUrl,expression){
       }}));
     });
   }finally{ws.close();}
+}
+// A page target can appear before Chrome has installed its final execution
+// context. Both probes use this identical bounded readiness/retry helper.
+async function evaluate(wsUrl,expression){
+  let lastError=null;
+  for(let attempt=1;attempt<=10;attempt++){
+    try{
+      const ready=await evaluateOnce(wsUrl,"document.readyState === 'complete'");
+      if(ready===true)return await evaluateOnce(wsUrl,expression);
+      lastError=new Error('document.readyState is not complete');
+    }catch(error){
+      if(!/Execution context was destroyed|Cannot find context|Context with specified id not found/i.test(String(error?.message||error)))
+        throw error;
+      lastError=error;
+    }
+    if(attempt<10)await sleep(300);
+  }
+  throw Error('Chromium execution context unavailable after 10 attempts (300 ms retry): '+String(lastError?.message||lastError));
 }
 const EXPRESSION=String.raw`(async()=>{
   const paths=['/__glrd/source.xml','/__glrd/stage.json','/__glrd/config.json'];
@@ -159,14 +177,16 @@ const EXPRESSION=String.raw`(async()=>{
     stagedJsonText:staged,
     onPreviewCommitted:result=>{committedResult=result;publicationCount++;},
   };
+  const initial=prev.xmlCiiDryRunPreview(xml,structuredClone(config),staged);
+  const expectedBranchCount=initial.branchRows.length;
+  if(!expectedBranchCount)throw Error('Source has no calculable Preview branch rows');
   const start=performance.now();
   await renderer.xmlCiiBuildAndRenderPreview(root,xml,config,{...options,forceBuild:true});
   const firstMs=performance.now()-start;
   assertNoPersistedPreview('initial Build');
-  if(publicationCount!==1||committedResult?.branchRows?.length!==30)
-    throw Error('Initial Build did not publish the direct 30-branch Preview result');
-  const initial=prev.xmlCiiDryRunPreview(xml,structuredClone(config),staged);
-  if(initial.branchRows.length!==30)throw Error('GLRD branch count changed');
+  if(publicationCount!==1||committedResult?.branchRows?.length!==expectedBranchCount)
+    throw Error('Preview branch count differs from source: expected '+expectedBranchCount
+      +', published '+String(committedResult?.branchRows?.length));
   const index=initial.branchRows.findIndex(row=>row.lineKey&&row.rating&&row.pipingClass);
   if(index<0)throw Error('No rated GLRD branch available');
   const target=initial.branchRows[index];
@@ -224,8 +244,21 @@ const EXPRESSION=String.raw`(async()=>{
     throw Error('Build button did not resolve pinned staged source');
   assertNoPersistedPreview('manual Build');
   const finalRatingSnapshotCount=assertCurrentRating('manual Build',target.branchName,corrected.rating);
+  // The Run phase exports result.enrichedText (output-run.js:87-90).
+  // Use its actual standalone workflow service; Preview itself only builds rows.
+  const runService=await import('/tabs/xml-cii-2019-standalone/xml-cii-workflow-service.js');
+  const enrichedRun=await runService.runXmlCii2019WorkflowService({
+    sourceKind:'xml',sourceName:'glrd-probe.xml',
+    sourceText:xml,stagedJsonText:staged,
+    supportConfigJson:JSON.stringify(config),
+    options:{outputMode:'enriched-only',analyzeTopology:false,generateTopoFix:false,useTopoFixForCii:false}
+  });
+  if(!enrichedRun?.ok||typeof enrichedRun.enrichedText!=='string'||!enrichedRun.enrichedText.trim())
+    throw Error('Production Run service has no enriched XML output: '+String(enrichedRun?.error||'enrichedText missing'));
+  const enrichedXmlText=enrichedRun.enrichedText;
   return {
     status:'PASS',scope:'actual Chromium renderer DOM and button-click; not full app import/navigation',
+    enrichedXmlText,
     realRendererInvoked:true,
     legacyCacheIgnored:true,failClosedIdle:true,manualBuildButtonWorked:true,
     noPersistedPreviewCacheAfterBuild:true,inMemoryRatingPublished:true,
@@ -238,7 +271,8 @@ const EXPRESSION=String.raw`(async()=>{
     resolutionsAfterIdle:afterIdleResolutions,
     resolutionsAfterBuild:stagedResolvers,initialRendererMs:firstMs,
     idleVisitMs:idleMs,manualBuildMs:performance.now()-clickTime,
-    branchCount:direct.branchRows.length,oldCacheEntryLength:oldEntry.length
+    branchCount:direct.branchRows.length,expectedBranchCount,
+    oldCacheEntryLength:oldEntry.length
   };
 })()`;
 async function browserCapture(files){
@@ -279,7 +313,21 @@ async function main(){
       config:await readFile(arg('config')),mode:'safe-preview'};
     report.commit=sha;
     report.inputs={xml:hash(files.xml),staged:hash(files.staged),config:hash(files.config)};
-    const result=await browserCapture(files);
+    const observed=await browserCapture(files);
+  const enrichedXmlText=observed?.enrichedXmlText;
+  if(typeof enrichedXmlText!=='string'||!enrichedXmlText.trim())
+    throw Error('No enriched XML was published by the production Run service');
+  const enrichedBytes=Buffer.from(enrichedXmlText,'utf8');
+  delete observed.enrichedXmlText;
+  observed.enrichedXmlBytes=enrichedBytes.byteLength;
+  observed.enrichedXmlSha256=hash(enrichedBytes);
+  if(arg('out-xml')){
+    const destination=resolve(arg('out-xml'));
+    await mkdir(dirname(destination),{recursive:true});
+    await writeFile(destination,enrichedBytes);
+    observed.enrichedXmlFile=destination;
+  }
+    const result=observed;
     if(!result||result.status!=='PASS'||!result.legacyCacheIgnored||!result.manualBuildButtonWorked)
       throw Error('Real browser did not validate fail-closed Preview');
     report.status='PASS';

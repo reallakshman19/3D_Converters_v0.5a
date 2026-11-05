@@ -11,7 +11,7 @@ import {createServer} from 'node:http';
 import {createServer as createSocketServer} from 'node:net';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {extname, join, resolve, sep} from 'node:path';
+import {dirname, extname, join, resolve, sep} from 'node:path';
 
 const flags=new Map();
 for(let i=2;i<process.argv.length;i+=2) flags.set(process.argv[i],process.argv[i+1]);
@@ -80,7 +80,7 @@ async function browserSocket(port,pagePort){
   }
   throw Error('Chromium DevTools page unavailable');
 }
-async function evaluate(wsUrl,expression){
+async function evaluateOnce(wsUrl,expression){
   const ws=new WebSocket(wsUrl);
   await new Promise((yes,no)=>{ws.onopen=yes;ws.onerror=()=>no(Error('CDP connection failed'));});
   try{
@@ -98,6 +98,24 @@ async function evaluate(wsUrl,expression){
       }}));
     });
   }finally{ws.close();}
+}
+// A page target can appear before Chrome has installed its final execution
+// context. Both probes use this identical bounded readiness/retry helper.
+async function evaluate(wsUrl,expression){
+  let lastError=null;
+  for(let attempt=1;attempt<=10;attempt++){
+    try{
+      const ready=await evaluateOnce(wsUrl,"document.readyState === 'complete'");
+      if(ready===true)return await evaluateOnce(wsUrl,expression);
+      lastError=new Error('document.readyState is not complete');
+    }catch(error){
+      if(!/Execution context was destroyed|Cannot find context|Context with specified id not found/i.test(String(error?.message||error)))
+        throw error;
+      lastError=error;
+    }
+    if(attempt<10)await sleep(300);
+  }
+  throw Error('Chromium execution context unavailable after 10 attempts (300 ms retry): '+String(lastError?.message||lastError));
 }
 const EXPRESSION=String.raw`(async()=>{
   const fetchInput=async path=>{
@@ -209,8 +227,20 @@ const EXPRESSION=String.raw`(async()=>{
     ratingSnapshotCount:readCurrentRatingRows('Fetch Rating'),
     envelopePresent:!!localStorage.getItem(cache.XML_CII_PREVIEW_CACHE_KEY)};
 
+  // The Run phase exports result.enrichedText (output-run.js:87-90).
+  // Use its actual standalone workflow service; Preview itself only builds rows.
+  const runService=await import('/tabs/xml-cii-2019-standalone/xml-cii-workflow-service.js');
+  const enrichedRun=await runService.runXmlCii2019WorkflowService({
+    sourceKind:'xml',sourceName:'glrd-probe.xml',
+    sourceText:xml,stagedJsonText:stage,
+    supportConfigJson:JSON.stringify(cfg),
+    options:{outputMode:'enriched-only',analyzeTopology:false,generateTopoFix:false,useTopoFixForCii:false}
+  });
+  if(!enrichedRun?.ok||typeof enrichedRun.enrichedText!=='string'||!enrichedRun.enrichedText.trim())
+    throw Error('Production Run service has no enriched XML output: '+String(enrichedRun?.error||'enrichedText missing'));
+  const enrichedXmlText=enrichedRun.enrichedText;
   return{status:'PASS',module:'real-workbench-v7-preview-renderer',first,revisit,
-    manualBuild,rebuild,fetchRating,
+    manualBuild,rebuild,fetchRating,enrichedXmlText,
     inMemoryPayloadRows:committedResult?.branchRows?.length||0,
     configHasRows:{linelist:cfg.linelist?.masterRows?.length,pipingClass:cfg.pipingClass?.masterRows?.length,
       weight:cfg.weight?.masterRows?.length},version:cache.XML_CII_PREVIEW_CACHE_SCHEMA};
@@ -250,6 +280,19 @@ async function main(){
     const sha=assertCheckout();const files={xml:await readFile(arg('xml')),staged:await readFile(arg('staged')),
       config:await readFile(arg('config')),mode:'v7-wrapper'};
     const observed=await browserCapture(files);
+  const enrichedXmlText=observed?.enrichedXmlText;
+  if(typeof enrichedXmlText!=='string'||!enrichedXmlText.trim())
+    throw Error('No enriched XML was published by the production Run service');
+  const enrichedBytes=Buffer.from(enrichedXmlText,'utf8');
+  delete observed.enrichedXmlText;
+  observed.enrichedXmlBytes=enrichedBytes.byteLength;
+  observed.enrichedXmlSha256=hash(enrichedBytes);
+  if(arg('out-xml')){
+    const destination=resolve(arg('out-xml'));
+    await mkdir(dirname(destination),{recursive:true});
+    await writeFile(destination,enrichedBytes);
+    observed.enrichedXmlFile=destination;
+  }
     if(observed?.status!=='PASS'||observed?.module!=='real-workbench-v7-preview-renderer'||!observed.first.rendered)
       throw Error('Real v7 wrapper did not render GLRD');
     report.status='PASS';report.commit=sha;
