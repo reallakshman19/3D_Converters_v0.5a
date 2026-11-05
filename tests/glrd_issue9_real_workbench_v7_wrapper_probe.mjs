@@ -116,9 +116,34 @@ const EXPRESSION=String.raw`(async()=>{
   document.body.appendChild(root);
   const host=root.querySelector('#mc-preview-table-host');
   if(!host)throw Error('Workbench Preview host missing');
+  let committedResult=null;
+  let publicationCount=0;
   const options={onSaveConfig:()=>{},ensureOverrides:c=>{c.overrides=c.overrides||{};return c.overrides;},
     openOverridePopup:()=>{},stagedJsonText:stage,stagedSourceLabel:'pinned-GLRD',
-    resolveStagedJsonText:async()=>({text:stage,label:'pinned-GLRD'})};
+    resolveStagedJsonText:async()=>({text:stage,label:'pinned-GLRD'}),
+    onPreviewCommitted:result=>{committedResult=result;publicationCount+=1;}};
+  const assertNoEnvelope=(action)=>{
+    if(localStorage.getItem(cache.XML_CII_PREVIEW_CACHE_KEY)!==null)
+      throw Error('R5 violation: persisted v7 Preview envelope present after '+action);
+  };
+  const readCurrentRatingRows=(action)=>{
+    const rows=committedResult?.branchRows;
+    const snapshot=rating.readXmlCiiPreviewRatingSnapshot();
+    if(!Array.isArray(rows)||!rows.length||!snapshot.records.length)
+      throw Error('No current in-memory Preview Rating after '+action);
+    const current=rows.find(row=>String(row.rating??'').trim());
+    const matched=snapshot.records.find(record=>record.branchName===current?.branchName);
+    if(!current||!matched||String(matched.rating)!==String(current.rating))
+      throw Error('Current Preview Rating differs from the direct in-memory publication after '+action);
+    return snapshot.records.length;
+  };
+  const waitFor=async(predicate,action)=>{
+    const startWaiting=performance.now();
+    while(!predicate()){
+      if(performance.now()-startWaiting>25000)throw Error('Timed out waiting for '+action);
+      await new Promise(ok=>setTimeout(ok,75));
+    }
+  };
   const start=performance.now();
   await v7.xmlCiiBuildAndRenderPreview(root,xml,cfg,{...options,forceBuild:true});
   await new Promise(ok=>setTimeout(ok,250));
@@ -129,6 +154,9 @@ const EXPRESSION=String.raw`(async()=>{
     ratingSnapshotCount:rating.readXmlCiiPreviewRatingSnapshot().records.length,
     dtxrRatingButton:!!host.querySelector('[data-mc-dtxr-rating-fetch]'),
     cacheEvidenceText:host.querySelector('[data-mc-preview-cache-evidence]')?.textContent?.slice(0,500)||''};
+  assertNoEnvelope('initial Build');
+  if(publicationCount!==1)throw Error('Initial Build did not publish exactly one direct result');
+  readCurrentRatingRows('initial Build');
   const startRevisit=performance.now();
   await v7.xmlCiiBuildAndRenderPreview(root,xml,cfg,{...options,forceBuild:false});
   await new Promise(ok=>setTimeout(ok,250));
@@ -142,9 +170,48 @@ const EXPRESSION=String.raw`(async()=>{
     manualBuildButton:!!host.querySelector('[data-mc-preview-build]'),
     dtxrRatingButton:!!host.querySelector('[data-mc-dtxr-rating-fetch]'),
     cacheEvidenceText:host.querySelector('[data-mc-preview-cache-evidence]')?.textContent?.slice(0,500)||''};
-  const envelope=JSON.parse(localStorage.getItem(cache.XML_CII_PREVIEW_CACHE_KEY)||'null');
+  assertNoEnvelope('manual idle');
+  if(revisit.ratingSnapshotCount!==0)throw Error('Manual idle published an obsolete Rating snapshot');
+
+  // Exercise the actual manual Build and Rebuild actions: the v7 wrapper's
+  // direct callback, not localStorage, is the current engineering authority.
+  const buildButton=host.querySelector('[data-mc-preview-build]');
+  if(!buildButton)throw Error('Manual Build Preview button missing');
+  const beforeManualBuild=publicationCount;
+  buildButton.click();
+  await waitFor(()=>publicationCount>beforeManualBuild&&host.dataset.mcPreviewBuildCompleted==='true','manual Build');
+  assertNoEnvelope('manual Build');
+  const manualBuild={rendered:!!host.querySelector('table[data-resizable-table="branch-preview"]'),
+    branchRows:host.querySelectorAll('tr.mc-preview-row').length,
+    ratingSnapshotCount:readCurrentRatingRows('manual Build'),
+    envelopePresent:!!localStorage.getItem(cache.XML_CII_PREVIEW_CACHE_KEY)};
+
+  const rebuildButton=host.querySelector('[data-mc-preview-build]');
+  if(!rebuildButton)throw Error('Rebuild Preview button missing');
+  const beforeRebuild=publicationCount;
+  rebuildButton.click();
+  await waitFor(()=>publicationCount>beforeRebuild&&host.dataset.mcPreviewBuildCompleted==='true','Rebuild');
+  assertNoEnvelope('Rebuild');
+  const rebuild={rendered:!!host.querySelector('table[data-resizable-table="branch-preview"]'),
+    branchRows:host.querySelectorAll('tr.mc-preview-row').length,
+    ratingSnapshotCount:readCurrentRatingRows('Rebuild'),
+    envelopePresent:!!localStorage.getItem(cache.XML_CII_PREVIEW_CACHE_KEY)};
+
+  const fetchButton=host.querySelector('[data-mc-dtxr-rating-fetch]');
+  if(!fetchButton)throw Error('Fetch Rating as per DTXR action missing');
+  const beforeFetch=publicationCount;
+  fetchButton.click();
+  await waitFor(()=>!!host.querySelector('[data-mc-dtxr-rating-notice]')
+    &&host.dataset.mcPreviewBuildCompleted==='true','Fetch Rating');
+  assertNoEnvelope('Fetch Rating');
+  const fetchRating={actionPresent:true,rebuilt:publicationCount>beforeFetch,
+    branchRows:committedResult?.branchRows?.length||0,
+    ratingSnapshotCount:readCurrentRatingRows('Fetch Rating'),
+    envelopePresent:!!localStorage.getItem(cache.XML_CII_PREVIEW_CACHE_KEY)};
+
   return{status:'PASS',module:'real-workbench-v7-preview-renderer',first,revisit,
-    envelopePayloadRows:envelope?.legacyPayload?.data?.branchRows?.length||0,
+    manualBuild,rebuild,fetchRating,
+    inMemoryPayloadRows:committedResult?.branchRows?.length||0,
     configHasRows:{linelist:cfg.linelist?.masterRows?.length,pipingClass:cfg.pipingClass?.masterRows?.length,
       weight:cfg.weight?.masterRows?.length},version:cache.XML_CII_PREVIEW_CACHE_SCHEMA};
 })()`;
@@ -154,7 +221,7 @@ async function browserCapture(files){
   const pagePort=server.address().port;
   const debugPort=await freePort();
   const profile=await mkdtemp(join(tmpdir(),'glrd-chrome-capture-'));
-  const exe=arg('chromium')||'google-chrome';
+  const exe=arg('chromium')||process.env.CHROME_PATH||'google-chrome';
   let stderr='';
   const chrome=spawn(exe,['--headless=new','--no-sandbox','--disable-gpu','--disable-dev-shm-usage',
     '--disable-background-networking','--no-first-run','--remote-allow-origins=*',
