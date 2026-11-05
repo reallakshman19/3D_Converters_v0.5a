@@ -279,11 +279,18 @@ export function _branchXmlFallbackFacts(branch) {
 }
 
 export function _branchBoreFromFirstUsefulNode(branch) {
+  // The node's physical OD is authoritative. An older saved BoreMm can be
+  // a stale branch-size copy; use it only when no known node OD is available.
+  for (const n of _xmlChildrenByName(branch, 'Node')) {
+    const od = Number(_xmlText(n, 'OuterDiameter') || _xmlText(n, 'OutsideDiameter') || _xmlText(n, 'OD'));
+    if (Number.isFinite(od) && od > 0) {
+      const d = _nominalDnFromOd(od);
+      if (d && d > 0) return d;
+    }
+  }
   for (const n of _xmlChildrenByName(branch, 'Node')) {
     const b = Number(_xmlText(n, 'BoreMm') || _xmlText(n, 'Bore'));
     if (Number.isFinite(b) && b > 0) return b;
-    const od = Number(_xmlText(n, 'OuterDiameter') || _xmlText(n, 'OutsideDiameter') || _xmlText(n, 'OD'));
-    if (Number.isFinite(od) && od > 0) { const d = _nominalDnFromOd(od); if (d && d > 0) return d; }
   }
   return null;
 }

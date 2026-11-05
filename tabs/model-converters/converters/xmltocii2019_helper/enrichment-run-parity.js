@@ -1,6 +1,7 @@
 import { parseXmlCiiEnrichmentConfig } from '../../../../converters/xml-cii2019-core/config.js';
 import { enrichXmlForCii2019 as enrichXmlForCii2019Base } from './enrichment-core.js?v=20260620-rating-override-1';
 import { xmlCiiDryRunPreview } from './preview-renderer.js?v=20260626-process-xml-fallback-1';
+import { resolveXmlCiiNodeBoreFromOutsideDiameter } from '../../../../converters/xml-cii2019-core/od-bore-resolver.js';
 
 const RENUMBERABLE_NEGATIVE_TYPES = new Set(['FLAN', 'VALV', 'RIGID', 'INST']);
 const INLINE_LENGTH_COMPONENT_TYPES = new Set(['FLAN', 'VALV', 'RIGID', 'INST']);
@@ -218,7 +219,11 @@ function setBranchNodeFacts(document, branch, row) {
   for (const node of childrenByName(branch, 'Node')) {
     if (setText(document, node, 'PipingClass', pipingClass)) count += 1;
     if (setText(document, node, 'Rating', rating)) count += 1;
-    if (boreMm != null && text(boreMm) !== '' && setText(document, node, 'BoreMm', Number(boreMm).toFixed(3))) count += 1;
+    // Run parity is the final writer: never overwrite physical node OD with
+    // the branch nominal size (which may include stale staged bore evidence).
+    const nodeBore = resolveXmlCiiNodeBoreFromOutsideDiameter(
+      childText(node, 'OutsideDiameter') || childText(node, 'OuterDiameter'), boreMm);
+    if (nodeBore != null && setText(document, node, 'BoreMm', nodeBore.toFixed(3))) count += 1;
     if (setText(document, node, 'WallThickness', numberText(wallThickness))) count += 1;
     if (setText(document, node, 'CorrosionAllowance', numberText(corrosion))) count += 1;
     if (setText(document, node, 'MaterialName', material)) count += 1;
