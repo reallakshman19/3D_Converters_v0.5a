@@ -10009,7 +10009,8 @@ export function renderModelConvertersTab(container) {
         }
 
         if (phaseId === 'weight-match') bindXmlCiiWeightMatchPhase(target, target);
-        if (phaseId === 'preview') bindXmlCiiPreviewPhase(target);
+        // Step 4 popup Preview is initialized above by the adapted v7 wrapper;
+        // never attach the legacy v5 renderer's Build handler here.
         if (phaseId === 'diagnostics') bindXmlCiiDiagnosticsPhase(target, target);
         if (phaseId === 'support-mapper') bindXmlCiiSupportMapperPhase(target);
         if (phaseId === 'config') bindXmlCiiConfigPhase(target);

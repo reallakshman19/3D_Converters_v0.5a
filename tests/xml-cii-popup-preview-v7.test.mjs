@@ -21,6 +21,7 @@ test('F2 popup Step 4 is routed to adapted v7 Build/Rebuild rather than v5', asy
   assert.match(src, /phaseId === 'preview'\) void xmlCiiInitializePopupPreviewV7\(target\)/);
   assert.match(src, /await xmlCiiBuildAndRenderPreviewV7\(target, xmlText, config,/);
   assert.doesNotMatch(src, /phaseId === 'preview'\) html = xmlCiiRenderPreviewPhase\(proxyRoot\)/);
+  assert.doesNotMatch(src, /phaseId === 'preview'\) bindXmlCiiPreviewPhase\(target\)/);
 });
 
 test('F2 v7 cleanup removes v5 and leaves no Preview storage after Build', () => {
