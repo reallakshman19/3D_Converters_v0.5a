@@ -1,4 +1,5 @@
 import { emit } from '../../core/event-bus.js';
+import { selectXmlCiiMasterWorkbookSheet } from './xml-cii-workbook-sheet-selection.js';
 import { state } from '../../core/state.js';
 import { RuntimeEvents } from '../../contracts/runtime-events.js';
 import { notify } from '../../diagnostics/notification-center.js';
@@ -8021,6 +8022,21 @@ export function renderModelConvertersTab(container) {
     xmlCiiRenderActiveWorkflow();
   }
 
+  // Shared selection for the legacy shell and the active popup.
+  function xmlCiiSelectMasterSheet(masterKey, sheetName) {
+    const local = xmlCiiLocalMasterState(masterKey);
+    const config = _parseXmlCiiEnrichmentConfig(activeValues().supportConfigJson);
+    selectXmlCiiMasterWorkbookSheet({
+      masterKey, local, sheetName, config,
+      detectLineListFieldMap: _detectLineListFieldMap,
+      autoMapFields: _xmlCiiAutoMapFields,
+      headersFromRows: _xmlCiiHeadersFromRows,
+      masterDef: XML_CII_MASTER_DEFS[masterKey],
+    });
+    if (local.rawRows.length) xmlCiiSaveMasterRows(masterKey);
+    return local;
+  }
+
   function xmlCiiSaveDynamicMappedFields(masterKey) {
     if (masterKey !== 'linelist') return;
     const local = xmlCiiLocalMasterState('linelist');
@@ -8263,17 +8279,8 @@ export function renderModelConvertersTab(container) {
     rootEl.querySelectorAll('[data-xml-cii-sheet]').forEach((select) => {
       select.addEventListener('change', () => {
         const masterKey = select.getAttribute('data-xml-cii-sheet') || 'linelist';
-        const local = xmlCiiLocalMasterState(masterKey);
-        local.selectedSheet = select.value;
-        local.rawRows = local.sheets[select.value] || [];
-        if (masterKey === 'linelist') {
-          const config = _parseXmlCiiEnrichmentConfig(activeValues().supportConfigJson);
-          local.fieldMap = _detectLineListFieldMap(local.rawRows, local.fieldMap, config);
-        } else {
-          local.fieldMap = _xmlCiiAutoMapFields(_xmlCiiHeadersFromRows(local.rawRows), XML_CII_MASTER_DEFS[masterKey], local.rawRows);
-        }
-        if (local.rawRows.length) xmlCiiSaveMasterRows(masterKey);
-        else xmlCiiRenderWorkflowRoot(rootEl, detailEl);
+        const local = xmlCiiSelectMasterSheet(masterKey, select.value);
+        if (!local.rawRows.length) xmlCiiRenderWorkflowRoot(rootEl, detailEl);
       });
     });
     // Override handlers use event delegation (attached once) so they survive DOM
@@ -9833,6 +9840,15 @@ export function renderModelConvertersTab(container) {
                 if (target.isConnected) rerender();
                 else { button.disabled = false; button.textContent = origText; }
               }
+            });
+          });
+
+          // Workbook Sheet: the same production mapping as the inline shell.
+          target.querySelectorAll('[data-xml-cii-sheet]').forEach((select) => {
+            select.addEventListener('change', () => {
+              const masterKey = select.getAttribute('data-xml-cii-sheet') || 'linelist';
+              xmlCiiSelectMasterSheet(masterKey, select.value);
+              if (target.isConnected) rerender();
             });
           });
 

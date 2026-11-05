@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const repoRoot = resolve(new URL('..', import.meta.url).pathname);
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const roots = ['tabs', 'core', 'converters'];
 const required = [
   'tabs/model-converters-tab.js',
