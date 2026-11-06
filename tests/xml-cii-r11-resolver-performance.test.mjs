@@ -33,3 +33,15 @@ test('R11 D2 config/override changes are not cached as resolved scores', () => {
   assert.equal(b.pipingClass, 'P9999999');
   assert.equal(scorePipingClassCandidate('A100','A100').method, 'exact');
 });
+
+test('R11 D2 timing marks instrument piping-class index, weight hints and Fetch Rating', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const [piping, hints, wrapper] = await Promise.all([
+    readFile(new URL('../converters/xml-cii2019-core/piping-class-resolver.js', import.meta.url), 'utf8'),
+    readFile(new URL('../converters/xml-cii2019-core/weight-valve-hints.js', import.meta.url), 'utf8'),
+    readFile(new URL('../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer-v7.js', import.meta.url), 'utf8'),
+  ]);
+  assert.match(piping, /xml-cii:piping-class:index/);
+  assert.match(hints, /xml-cii:weight-hints:rank/);
+  assert.match(wrapper, /xml-cii:popup:fetch-rating/);
+});

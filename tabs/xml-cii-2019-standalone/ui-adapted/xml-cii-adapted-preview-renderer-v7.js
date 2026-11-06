@@ -85,6 +85,9 @@ function installDtxrRatingAction({ host, rootEl, xmlText, config, options, branc
   button.style.cssText = 'padding:8px 14px;min-width:210px;';
   actionBar.appendChild(button);
   button.addEventListener('click', async () => {
+    const perf = typeof performance !== 'undefined' ? performance : null;
+    perf?.mark?.('xml-cii:popup:fetch-rating:start');
+    try {
     button.disabled = true;
     const result = applyPreviewDtxrRatingOverrides(config, branchRows);
     const changed = result.applied > 0 || result.cleared > 0;
@@ -109,6 +112,11 @@ function installDtxrRatingAction({ host, rootEl, xmlText, config, options, branc
         addNotice(host, `DTXR Rating fetch failed: ${text(error?.message || error)}`, true);
         button.disabled = false;
       }
+    }
+    } finally {
+      perf?.mark?.('xml-cii:popup:fetch-rating:end');
+      perf?.measure?.('xml-cii:popup:fetch-rating',
+        'xml-cii:popup:fetch-rating:start', 'xml-cii:popup:fetch-rating:end');
     }
   });
 }
