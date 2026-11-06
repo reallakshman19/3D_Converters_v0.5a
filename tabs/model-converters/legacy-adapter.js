@@ -6759,10 +6759,18 @@ export function renderModelConvertersTab(container) {
   }
 
   function xmlCiiSaveConfig(config) {
-    activeValues().supportConfigJson = JSON.stringify(config, null, 2);
-    xmlCiiPersistLargeConfigChange('XML->CII config');
-    xmlCiiRenderAdvancedWhenConfigFits();
-    _xmlCiiSyncConfigTextarea();
+    const perf = typeof performance !== 'undefined' ? performance : null;
+    perf?.mark?.('xml-cii:popup:config-save:start');
+    try {
+      activeValues().supportConfigJson = JSON.stringify(config, null, 2);
+      xmlCiiPersistLargeConfigChange('XML->CII config');
+      xmlCiiRenderAdvancedWhenConfigFits();
+      _xmlCiiSyncConfigTextarea();
+    } finally {
+      perf?.mark?.('xml-cii:popup:config-save:end');
+      perf?.measure?.('xml-cii:popup:config-save',
+        'xml-cii:popup:config-save:start', 'xml-cii:popup:config-save:end');
+    }
   }
 
   function xmlCiiSpecwiseMasterPaths(config) {
@@ -7138,6 +7146,8 @@ export function renderModelConvertersTab(container) {
   }
 
   function xmlCiiConfigWithLoadedMasterRows(contextLabel) {
+    const perf = typeof performance !== 'undefined' ? performance : null;
+    perf?.mark?.('xml-cii:popup:master-hydrate:start');
     const values = activeValues();
     const config = _parseXmlCiiEnrichmentConfig(values.supportConfigJson);
     let hydrated = false;
@@ -7169,6 +7179,9 @@ export function renderModelConvertersTab(container) {
       xmlCiiPersistLargeConfigChange(contextLabel);
     }
 
+    perf?.mark?.('xml-cii:popup:master-hydrate:end');
+    perf?.measure?.('xml-cii:popup:master-hydrate',
+      'xml-cii:popup:master-hydrate:start', 'xml-cii:popup:master-hydrate:end');
     return config;
   }
 
