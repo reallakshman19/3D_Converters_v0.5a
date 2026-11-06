@@ -15,7 +15,7 @@ test('R11 D3 fresh profile selects xml_to_cii before looking for workflow launch
 
 test('R11 D3 Windows Chrome profile cleanup waits for exit and retries EBUSY', async () => {
   const src = await readFile(path, 'utf8');
-  assert.match(src, /chrome\.once\('exit', done\)/);
+  assert.match(src, /chrome\.once\('exit', settled\)/);
   assert.match(src, /'EBUSY', 'EPERM', 'ENOTEMPTY'/);
   assert.match(src, /await rm\(profile, \{ recursive: true, force: true, maxRetries: 2/);
 });

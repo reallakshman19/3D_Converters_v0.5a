@@ -282,14 +282,13 @@ async function main() {
     chrome.kill();
     // Windows keeps the Chrome profile locked while the child is exiting.
     // Wait for process exit before removing its User Data Directory.
-    await Promise.race([
-      new Promise((done) => {
-        if (chrome.exitCode !== null || chrome.signalCode !== null) return done();
-        chrome.once('exit', done);
-        chrome.once('error', done);
-      }),
-      sleep(5000),
-    ]);
+    await new Promise((done) => {
+      const timeout = setTimeout(done, 5000);
+      const settled = () => { clearTimeout(timeout); done(); };
+      if (chrome.exitCode !== null || chrome.signalCode !== null) return settled();
+      chrome.once('exit', settled);
+      chrome.once('error', settled);
+    });
     await new Promise((ok) => {
       server.close(ok);
       server.closeAllConnections?.();
