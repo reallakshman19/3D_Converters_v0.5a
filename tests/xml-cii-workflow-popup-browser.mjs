@@ -136,6 +136,13 @@ const CHECK = String.raw`(async () => {
   document.body.appendChild(host);
   const tab = await import('/tabs/model-converters/ModelConvertersTab.js?v=20260816-cii-v11-v14-dropdown-release-4');
   tab.renderModelConvertersTab(host, {});
+  // A fresh Chrome profile defaults to rvm_to_rev. Select the real XML->CII
+  // converter before looking for its workflow launcher.
+  const converterSelect = host.querySelector('#model-converters-select');
+  if (!converterSelect) throw Error('Model converter selector missing');
+  converterSelect.value = 'xml_to_cii';
+  converterSelect.dispatchEvent(new Event('change', { bubbles: true }));
+  if (converterSelect.value !== 'xml_to_cii') throw Error('Failed to select xml_to_cii');
   await waitFor(() => !!host.querySelector('#model-converters-xml-cii-workflow-btn'), 'workflow launcher');
   const bridgeModule = await import('/tabs/model-converters/xml-cii-workflow-bridge.js?v=20260708-workflow-bridge-align-1');
   await waitFor(() => !!bridgeModule.xmlCiiWorkflowGetBridge(), 'single shared phase bridge');
@@ -273,8 +280,32 @@ async function main() {
     console.log(JSON.stringify(result, null, 2));
   } finally {
     chrome.kill();
-    await new Promise((ok) => server.close(ok));
-    await rm(profile, { recursive: true, force: true });
+    // Windows keeps the Chrome profile locked while the child is exiting.
+    // Wait for process exit before removing its User Data Directory.
+    await Promise.race([
+      new Promise((done) => {
+        if (chrome.exitCode !== null || chrome.signalCode !== null) return done();
+        chrome.once('exit', done);
+        chrome.once('error', done);
+      }),
+      sleep(5000),
+    ]);
+    await new Promise((ok) => {
+      server.close(ok);
+      server.closeAllConnections?.();
+    });
+    let cleaned = false;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      try {
+        await rm(profile, { recursive: true, force: true, maxRetries: 2, retryDelay: 300 });
+        cleaned = true;
+        break;
+      } catch (error) {
+        if (!['EBUSY', 'EPERM', 'ENOTEMPTY'].includes(error?.code)) throw error;
+        await sleep(250 * (attempt + 1));
+      }
+    }
+    if (!cleaned) console.warn('Chrome profile cleanup deferred (file lock):', profile);
   }
 }
 
