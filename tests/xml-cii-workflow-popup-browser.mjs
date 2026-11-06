@@ -234,10 +234,10 @@ const BM2_CHECK = String.raw`(async () => {
   if (typeof phase.buildMs !== 'number' || typeof phase.fetchRatingMs !== 'number')
     throw Error('BM2 actions were not completed');
   const measures = performance.getEntriesByType('measure')
-    .filter(entry => entry.name.startsWith('xml-cii:config-store:'))
+    .filter(entry => entry.name.startsWith('xml-cii:'))
     .map(entry => ({ name: entry.name, durationMs: entry.duration }));
   return { status: 'PASS', bm2: true, phase, maxWriteBytes: Math.max(0, ...writes.map(x=>x.bytes)),
-    storageWrites: writes, configStoreMeasures: measures };
+    storageWrites: writes, popupPerformanceMeasures: measures };
 })()`;
 
 async function main() {
