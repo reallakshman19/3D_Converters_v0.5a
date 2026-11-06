@@ -111,27 +111,53 @@ export function loadStoredState() {
 }
 
 export function saveStoredState(selectedConverter, defaultsByConverter) {
-  // Keep full masters in the live defaults object. Persist the existing
-  // master-stripped representation FIRST: the former full-size setItem attempt
-  // could synchronously block the popup and fail the browser storage quota.
-  // No conversion or in-memory configuration values are changed.
+  // A small config must keep its imported masters across reloads. For a
+  // multi-MB config choose the existing master-stripped format BEFORE setItem,
+  // never attempt the large localStorage write and rely on a quota exception.
   const perf = typeof performance !== 'undefined' ? performance : null;
+  const MAX_WRITE_BYTES = 1_000_000;
   perf?.mark?.('xml-cii:config-store:prepare:start');
-  const storageDefaults = _storageSafeDefaults(defaultsByConverter);
+  const xmlConfigSize = Object.values(defaultsByConverter || {}).reduce(
+    (sum, value) => sum + (typeof value?.supportConfigJson === 'string' ? value.supportConfigJson.length : 0), 0);
+  let storageDefaults = xmlConfigSize > 750_000
+    ? _storageSafeDefaults(defaultsByConverter) : defaultsByConverter;
+  const serialize = (defaults) => JSON.stringify({ selectedConverter, defaultsByConverter: defaults });
+  let payload = serialize(storageDefaults);
+  const payloadBytes = (value) => new TextEncoder().encode(value).byteLength;
+  if (payloadBytes(payload) > MAX_WRITE_BYTES && storageDefaults === defaultsByConverter) {
+    storageDefaults = _storageSafeDefaults(defaultsByConverter);
+    payload = serialize(storageDefaults);
+  }
   perf?.mark?.('xml-cii:config-store:prepare:end');
-  if (perf?.measure) perf.measure('xml-cii:config-store:prepare',
+  perf?.measure?.('xml-cii:config-store:prepare',
     'xml-cii:config-store:prepare:start', 'xml-cii:config-store:prepare:end');
-  const payload = JSON.stringify({ selectedConverter, defaultsByConverter: storageDefaults });
-  try {
+  const write = (value) => {
+    if (payloadBytes(value) > MAX_WRITE_BYTES) throw new Error('persistent defaults exceed 1MB budget');
     perf?.mark?.('xml-cii:config-store:write:start');
-    window.localStorage.setItem(STORAGE_KEY, payload);
+    try { window.localStorage.setItem(STORAGE_KEY, value); }
+    finally {
+      perf?.mark?.('xml-cii:config-store:write:end');
+      perf?.measure?.('xml-cii:config-store:write',
+        'xml-cii:config-store:write:start', 'xml-cii:config-store:write:end');
+    }
+  };
+  try {
+    write(payload);
     return storageDefaults === defaultsByConverter ? 'full' : 'trimmed';
   } catch (error) {
-    console.warn('model-converters: config not persisted to localStorage (quota exceeded).', error);
+    if (storageDefaults === defaultsByConverter) {
+      try {
+        const compact = _storageSafeDefaults(defaultsByConverter);
+        if (compact !== defaultsByConverter) {
+          write(serialize(compact));
+          return 'trimmed';
+        }
+      } catch (innerError) {
+        console.warn('model-converters: config not persisted to localStorage.', innerError);
+        return 'failed';
+      }
+    }
+    console.warn('model-converters: config not persisted to localStorage.', error);
     return 'failed';
-  } finally {
-    perf?.mark?.('xml-cii:config-store:write:end');
-    if (perf?.measure) perf.measure('xml-cii:config-store:write',
-      'xml-cii:config-store:write:start', 'xml-cii:config-store:write:end');
   }
 }

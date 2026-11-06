@@ -63,3 +63,30 @@ test('R10 P1: small configuration persists unchanged, without a storage rewrite'
     assert.deepEqual(JSON.parse(entries[0].value).defaultsByConverter, defaults);
   } finally { globalThis.window = prev; }
 });
+
+test('R11 D1: a small config with 15 line-list and 2 piping-class rows survives reload intact', () => {
+  const config = {
+    linelist: { masterRows: Array.from({ length: 15 }, (_, i) =>
+      ({ lineNo: 'BM2-L' + i, material: i % 2 ? 'DSS' : 'LTCS' })), fieldMap: { material: 'Material' } },
+    pipingClass: { masterRows: [{ pipingClass: 'P4110001', rating: 150 },
+      { pipingClass: 'P4110002', rating: 300 }] },
+    overrides: { rating: { B6: '150' } },
+  };
+  const defaults = { xml_to_cii: { supportConfigJson: JSON.stringify(config) } };
+  const { entries, storage } = captureWrites();
+  const previousWindow = globalThis.window;
+  globalThis.window = { localStorage: storage };
+  try {
+    assert.equal(saveStoredState('xml_to_cii', defaults), 'full',
+      'small imported masters must persist in full, not trigger the too-large warning');
+    assert.equal(entries.length, 1);
+    assert.ok(entries[0].bytes < 1_000_000);
+    const reloaded = JSON.parse(storage.getItem('model-converters.defaults.v1'));
+    const restored = JSON.parse(reloaded.defaultsByConverter.xml_to_cii.supportConfigJson);
+    assert.deepEqual(restored.linelist.masterRows, config.linelist.masterRows);
+    assert.deepEqual(restored.pipingClass.masterRows, config.pipingClass.masterRows);
+    assert.equal(restored._mastersStrippedForStorage, undefined);
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
