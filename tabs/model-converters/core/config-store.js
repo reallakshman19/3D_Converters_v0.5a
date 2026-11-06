@@ -111,19 +111,27 @@ export function loadStoredState() {
 }
 
 export function saveStoredState(selectedConverter, defaultsByConverter) {
-  const write = (defaults) => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ selectedConverter, defaultsByConverter: defaults }));
-  };
+  // Keep full masters in the live defaults object. Persist the existing
+  // master-stripped representation FIRST: the former full-size setItem attempt
+  // could synchronously block the popup and fail the browser storage quota.
+  // No conversion or in-memory configuration values are changed.
+  const perf = typeof performance !== 'undefined' ? performance : null;
+  perf?.mark?.('xml-cii:config-store:prepare:start');
+  const storageDefaults = _storageSafeDefaults(defaultsByConverter);
+  perf?.mark?.('xml-cii:config-store:prepare:end');
+  if (perf?.measure) perf.measure('xml-cii:config-store:prepare',
+    'xml-cii:config-store:prepare:start', 'xml-cii:config-store:prepare:end');
+  const payload = JSON.stringify({ selectedConverter, defaultsByConverter: storageDefaults });
   try {
-    write(defaultsByConverter);
-    return 'full';
+    perf?.mark?.('xml-cii:config-store:write:start');
+    window.localStorage.setItem(STORAGE_KEY, payload);
+    return storageDefaults === defaultsByConverter ? 'full' : 'trimmed';
   } catch (error) {
-    try {
-      write(_storageSafeDefaults(defaultsByConverter));
-      return 'trimmed';
-    } catch (innerError) {
-      console.warn('model-converters: config not persisted to localStorage (quota exceeded).', innerError);
-      return 'failed';
-    }
+    console.warn('model-converters: config not persisted to localStorage (quota exceeded).', error);
+    return 'failed';
+  } finally {
+    perf?.mark?.('xml-cii:config-store:write:end');
+    if (perf?.measure) perf.measure('xml-cii:config-store:write',
+      'xml-cii:config-store:write:start', 'xml-cii:config-store:write:end');
   }
 }
