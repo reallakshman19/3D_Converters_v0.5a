@@ -58,14 +58,22 @@ function _storageSafeDefaults(defaultsByConverter) {
     let config;
     try { config = JSON.parse(json); } catch { continue; }
     let stripped = false;
+    const strippedSections = [];
     for (const [section, key] of STORAGE_MASTER_ARRAY_PATHS) {
       if (config && config[section] && Array.isArray(config[section][key]) && config[section][key].length) {
         config[section][key] = [];
         stripped = true;
+        strippedSections.push(section);
       }
     }
     if (!stripped) continue;
     config._mastersStrippedForStorage = true;
+    // Include tables omitted by an earlier save; the expected set survives
+    // reload until all of those tables have actually been re-imported.
+    config._mastersStrippedSectionsForStorage = [
+      ...new Set([...(Array.isArray(config._mastersStrippedSectionsForStorage)
+        ? config._mastersStrippedSectionsForStorage : []), ...strippedSections]),
+    ];
     if (!cloned) { result = { ...defaultsByConverter }; cloned = true; }
     result[converterId] = { ...values, supportConfigJson: JSON.stringify(config) };
   }

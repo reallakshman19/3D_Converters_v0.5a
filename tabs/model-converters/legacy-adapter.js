@@ -1,4 +1,5 @@
 import { emit } from '../../core/event-bus.js';
+import { missingPersistedXmlCiiMasters, missingPersistedXmlCiiMastersNotice } from './core/imported-master-run-guard.js';
 import { selectXmlCiiMasterWorkbookSheet } from './xml-cii-workbook-sheet-selection.js';
 import { state } from '../../core/state.js';
 import { RuntimeEvents } from '../../contracts/runtime-events.js';
@@ -7643,6 +7644,8 @@ export function renderModelConvertersTab(container) {
   // -------------------------------------------------------------------------
   function xmlCiiRenderRunPhase() {
     const config = xmlCiiConfigWithLoadedMasterRows('XML->CII run-phase');
+    const missingMasters = missingPersistedXmlCiiMasters(config);
+    const blockedNotice = missingPersistedXmlCiiMastersNotice(missingMasters);
     const values = activeValues();
     const linelistRows = Array.isArray(config.linelist?.masterRows) ? config.linelist.masterRows.length : 0;
     const pcRows = Array.isArray(config.pipingClass?.masterRows) ? config.pipingClass.masterRows.length : 0;
@@ -7664,6 +7667,7 @@ export function renderModelConvertersTab(container) {
     };
     return `
       <div class="model-converters-workflow-detail-title">5 Run</div>
+      ${blockedNotice ? `<div role="alert" data-xml-cii-missing-masters style="color:#ffb4b4;padding:12px;border:1px solid #b84c4c;">${_esc(blockedNotice)}</div>` : ''}
       <div class="model-converters-workflow-detail-text">
         Run the conversion — generates enriched XML and final CII output.
       </div>
@@ -7699,11 +7703,11 @@ export function renderModelConvertersTab(container) {
         </div>
       </div>
       <div style="margin-top:12px;display:flex;gap:8px;flex-direction:column;">
-        <button type="button" class="model-converters-run-btn" data-xml-cii-run-from-workflow style="width:100%;padding:12px;">
+        <button type="button" class="model-converters-run-btn" data-xml-cii-run-from-workflow style="width:100%;padding:12px;" ${missingMasters.length ? 'disabled' : ''}>
           ▶ Run — Review Weight Matches
         </button>
         <div class="model-converters-workflow-detail-note">Opens <strong>4A Weight Match</strong> to review approximate weights, then Finalize and Run.</div>
-        <button type="button" class="model-converters-download-btn" data-xml-cii-finalize-run style="width:100%;padding:12px;">
+        <button type="button" class="model-converters-download-btn" data-xml-cii-finalize-run style="width:100%;padding:12px;" ${missingMasters.length ? 'disabled' : ''}>
           Finalise and Run
         </button>
       </div>
@@ -7731,7 +7735,14 @@ export function renderModelConvertersTab(container) {
     rootEl.querySelectorAll('[data-xml-cii-finalize-run]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const _capturedFile = primaryInputEl?.files?.[0] || primaryFile;
-        const _capturedConfig = _parseXmlCiiEnrichmentConfig(activeValues().supportConfigJson);
+        const _capturedConfig = xmlCiiConfigWithLoadedMasterRows('XML->CII finalise preflight');
+        const missing = missingPersistedXmlCiiMasters(_capturedConfig);
+        if (missing.length) {
+          const message = missingPersistedXmlCiiMastersNotice(missing);
+          notify({ level: 'error', title: 'XML->CII Run blocked', message });
+          setStatus(message, 'bad');
+          return;
+        }
         // Close the workflow UI before showing the validator popup
         xmlCiiCloseWorkflowPopup();
         const triggerRun = () => {
@@ -9433,6 +9444,18 @@ export function renderModelConvertersTab(container) {
   });
 
   runBtnEl.addEventListener('click', async () => {
+    if (selectedConverter === 'xml_to_cii') {
+      const runConfig = xmlCiiConfigWithLoadedMasterRows('XML->CII Run preflight');
+      const missing = missingPersistedXmlCiiMasters(runConfig);
+      if (missing.length) {
+        const message = missingPersistedXmlCiiMastersNotice(missing);
+        setStatus(message, 'bad');
+        setLogs([message]);
+        outputEl.innerHTML = '<div role="alert" data-xml-cii-missing-masters>' + _esc(message) + '</div>';
+        notify({ level: 'error', title: 'XML->CII Run blocked', message });
+        return;
+      }
+    }
     const converter = getConverterById(selectedConverter);
     if (!converter) {
       notify({ level: 'error', title: 'Converter', message: `Converter "${selectedConverter}" not found in registry.` });
@@ -10003,7 +10026,14 @@ export function renderModelConvertersTab(container) {
           target.querySelectorAll('[data-xml-cii-finalize-run]').forEach((btn) => {
             btn.addEventListener('click', async () => {
               const _capturedFile = primaryInputEl?.files?.[0] || primaryFile;
-              const _capturedConfig = _parseXmlCiiEnrichmentConfig(activeValues().supportConfigJson);
+              const _capturedConfig = xmlCiiConfigWithLoadedMasterRows('XML->CII popup Run preflight');
+              const missing = missingPersistedXmlCiiMasters(_capturedConfig);
+              if (missing.length) {
+                const message = missingPersistedXmlCiiMastersNotice(missing);
+                notify({ level: 'error', title: 'XML->CII Run blocked', message });
+                setStatus(message, 'bad');
+                return;
+              }
               if (typeof self.closePopup === 'function') self.closePopup();
               const triggerRun = () => { document.querySelector('#model-converters-run')?.click(); };
               await runXmlCiiStandalonePostRunValidation({
