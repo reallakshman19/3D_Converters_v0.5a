@@ -28,6 +28,11 @@ export const DEFAULT_PIPING_CLASS_MATCH_CONFIG = Object.freeze({
   }),
 });
 
+// Bounded normalization cache: a class label is immutable text, reused across
+// thousands of row comparisons. Never cache objects or mutable master rows.
+const normalizedClassStrings = new Map();
+const PIPE_CLASS_CACHE_LIMIT = 16384;
+const indexedClassWork = new WeakMap();
 function text(value) { return value === undefined || value === null ? '' : String(value).trim(); }
 function number(value) {
   const match = text(value).replace(/,/g, '').match(/[-+]?\d*\.?\d+/);
@@ -36,7 +41,12 @@ function number(value) {
 }
 
 export function normalizePipingClass(value) {
-  return text(value).toUpperCase().replace(/^=/, '').replace(/\s+/g, '').replace(/[^A-Z0-9]/g, '');
+  const raw = text(value);
+  if (normalizedClassStrings.has(raw)) return normalizedClassStrings.get(raw);
+  const result = raw.toUpperCase().replace(/^=/, '').replace(/\s+/g, '').replace(/[^A-Z0-9]/g, '');
+  if (normalizedClassStrings.size >= PIPE_CLASS_CACHE_LIMIT) normalizedClassStrings.clear();
+  normalizedClassStrings.set(raw, result);
+  return result;
 }
 
 export function displayPipingClass(value) { return text(value).toUpperCase(); }
@@ -135,8 +145,7 @@ function familyCandidates(requestedClass, classes) {
   return maxDepth > 0 ? ranked.filter((item) => item.depth === maxDepth).map((item) => item.candidate) : [];
 }
 
-export function scorePipingClassCandidate(requestedClass, candidateClass, config = {}) {
-  const cfg = mergeConfig(config);
+function scorePipingClassCandidatePrepared(requestedClass, candidateClass, cfg) {
   const requested = normalizePipingClass(requestedClass);
   const candidate = normalizePipingClass(candidateClass);
   const result = (score, confidence, method, reasons) => ({
@@ -163,14 +172,29 @@ export function scorePipingClassCandidate(requestedClass, candidateClass, config
   return result(score, Math.max(0, Math.min(ratio >= cfg.fuzzyMinRatio ? 0.8 : 0.6, ratio)), ratio >= cfg.fuzzyMinRatio ? 'fuzzy-ratio' : 'below-threshold', [`ratio:${ratio.toFixed(3)}`]);
 }
 
+export function scorePipingClassCandidate(requestedClass, candidateClass, config = {}) {
+  return scorePipingClassCandidatePrepared(requestedClass, candidateClass, mergeConfig(config));
+}
+
 export function resolveApproximatePipingClass({ requestedClass, knownClasses, pipingClassIndex, overrides = {}, config = {} }) {
   const cfg = mergeConfig(config);
   const rawRequested = displayPipingClass(requestedClass);
   const normalizedRequestedClass = normalizePipingClass(rawRequested);
-  const allClasses = uniqueClasses(knownClasses || knownClassesFromIndex(pipingClassIndex));
-  const candidateClasses = familyCandidates(rawRequested, allClasses);
+  // The index is built afresh per calculation. Reuse its unique class list
+  // and the class-family shortlist, but NEVER cache config/override-dependent
+  // scores, reviews or final selections.
+  const cached = !knownClasses && pipingClassIndex && indexedClassWork.get(pipingClassIndex);
+  const allClasses = cached?.knownClasses || uniqueClasses(knownClasses || knownClassesFromIndex(pipingClassIndex));
+  const candidateKey = normalizePipingClass(rawRequested);
+  let candidateClasses = cached?.families.get(candidateKey);
+  if (!candidateClasses) {
+    candidateClasses = familyCandidates(rawRequested, allClasses);
+    if (cached) cached.families.set(candidateKey, candidateClasses);
+  } else if (cached) {
+    cached.familyCacheHits += 1;
+  }
   const scored = candidateClasses
-    .map((candidate) => scorePipingClassCandidate(rawRequested, candidate, config))
+    .map((candidate) => scorePipingClassCandidatePrepared(rawRequested, candidate, cfg))
     .filter((entry) => Number.isFinite(entry.score))
     .sort((left, right) => right.score - left.score || left.candidate.localeCompare(right.candidate));
   const best = scored[0] || null;
@@ -186,6 +210,9 @@ export function resolveApproximatePipingClass({ requestedClass, knownClasses, pi
 export function buildPipingClassIndex(rows, fieldMap = {}) {
   const map = new Map();
   const knownClasses = [];
+  const seenClasses = new Set();
+  const perf = typeof performance !== 'undefined' ? performance : null;
+  perf?.mark?.('xml-cii:piping-class:index:start');
   const safeRows = (Array.isArray(rows) ? rows : []).map(normalizeXmlCiiPipingClassMasterRow);
   for (const row of safeRows) {
     const rawClass = readClassFromRow(row, fieldMap);
@@ -193,11 +220,18 @@ export function buildPipingClassIndex(rows, fieldMap = {}) {
     if (!normalized) continue;
     if (!map.has(normalized)) map.set(normalized, []);
     map.get(normalized).push(row);
-    if (!knownClasses.some((value) => normalizePipingClass(value) === normalized)) knownClasses.push(displayPipingClass(rawClass));
+    if (!seenClasses.has(normalized)) {
+      seenClasses.add(normalized);
+      knownClasses.push(displayPipingClass(rawClass));
+    }
   }
   map.byClass = map;
   map.knownClasses = knownClasses;
   map.rows = safeRows;
+  indexedClassWork.set(map, { knownClasses, families: new Map(), familyCacheHits: 0 });
+  perf?.mark?.('xml-cii:piping-class:index:end');
+  perf?.measure?.('xml-cii:piping-class:index',
+    'xml-cii:piping-class:index:start', 'xml-cii:piping-class:index:end');
   return map;
 }
 
@@ -214,8 +248,7 @@ function normalizeComponentType(value) {
 function normalizeRating(value) { return text(value).toUpperCase().replace(/CLASS|CL|#|RATING/g, '').replace(/\s+/g, ''); }
 function normalizeSchedule(value) { return text(value).toUpperCase().replace(/\s+/g, ''); }
 
-export function scorePipingClassRow({ row, pipingClass, boreMm, componentType, rating, schedule, config = {} }) {
-  const cfg = mergeConfig(config).rowScoring;
+function scorePipingClassRowPrepared({ row, pipingClass, boreMm, componentType, rating, schedule }, cfg) {
   const normalizedRow = normalizeXmlCiiPipingClassMasterRow(row);
   const rowClass = normalizePipingClass(readClassFromRow(normalizedRow));
   const requestedClass = normalizePipingClass(pipingClass);
@@ -244,12 +277,23 @@ export function scorePipingClassRow({ row, pipingClass, boreMm, componentType, r
   return { score, confidence: Math.max(0, Math.min(1, score / maximum)), needsReview: reasons.includes('bore-missing'), reasons };
 }
 
+export function scorePipingClassRow(options) {
+  return scorePipingClassRowPrepared(options, mergeConfig(options?.config || {}).rowScoring);
+}
+
+// Test diagnostics are confined to per-build index statistics.
+export function readPipingClassIndexCacheStats(index) {
+  const cached = index && indexedClassWork.get(index);
+  return { familyCacheHits: cached?.familyCacheHits || 0,
+    distinctFamilyLookups: cached?.families.size || 0 };
+}
+
 export function findBestPipingClassRow({ pipingClass, boreMm, componentType, rating, schedule, pipingClassIndex, overrides = {}, config = {} }) {
   const cfg = mergeConfig(config).rowScoring;
   const classMatch = resolveApproximatePipingClass({ requestedClass: pipingClass, pipingClassIndex, overrides, config });
   const resolvedPipingClass = normalizePipingClass(classMatch.pipingClass || pipingClass);
   const scored = rowsForClass(pipingClassIndex, resolvedPipingClass)
-    .map((row) => ({ row, ...scorePipingClassRow({ row, pipingClass: resolvedPipingClass, boreMm, componentType, rating, schedule, config }) }))
+    .map((row) => ({ row, ...scorePipingClassRowPrepared({ row, pipingClass: resolvedPipingClass, boreMm, componentType, rating, schedule }, cfg) }))
     .filter((entry) => Number.isFinite(entry.score))
     .sort((left, right) => right.score - left.score);
   const best = scored[0] || null;

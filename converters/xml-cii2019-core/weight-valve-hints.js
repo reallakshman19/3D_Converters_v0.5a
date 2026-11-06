@@ -1,7 +1,31 @@
 function text(value) { return value === null || value === undefined ? '' : String(value); }
 function numberOr(value, fallback) { const numeric = Number(value); return Number.isFinite(numeric) ? numeric : fallback; }
 function pickText(row, keys) { for (const key of keys || []) { const value = row?.[key] ?? row?._raw?.[key]; if (text(value).trim()) return text(value).trim(); } return ''; }
-function pickNumber(row, keys) { for (const key of keys || []) { const match = text(row?.[key] ?? row?._raw?.[key]).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/); if (!match) continue; const numeric = Number(match[0]); if (Number.isFinite(numeric)) return numeric; } return null; }
+// Memoize only primitive field parsing. The selected raw field value is checked
+// on every lookup, so edits to a master row invalidate the entry automatically.
+const numericMasterFields = new WeakMap();
+const masterNumberPattern = /-?\d+(?:\.\d+)?/;
+function pickNumber(row, keys) {
+  let cachedFields = row && typeof row === 'object' ? numericMasterFields.get(row) : null;
+  if (!cachedFields && row && typeof row === 'object') {
+    cachedFields = new Map(); numericMasterFields.set(row, cachedFields);
+  }
+  for (const key of keys || []) {
+    const raw = row?.[key] ?? row?._raw?.[key];
+    const eligible = raw === null || raw === undefined || ['string', 'number', 'boolean'].includes(typeof raw);
+    const entry = eligible ? cachedFields?.get(key) : null;
+    let value;
+    if (entry && Object.is(entry.raw, raw)) value = entry.number;
+    else {
+      const match = text(raw).replace(/,/g, '').match(masterNumberPattern);
+      const parsed = match ? Number(match[0]) : NaN;
+      value = Number.isFinite(parsed) ? parsed : null;
+      if (eligible) cachedFields?.set(key, { raw, number: value });
+    }
+    if (value !== null) return value;
+  }
+  return null;
+}
 export function normalizeWeightText(value) { return text(value).toUpperCase().replace(/[_/\\]+/g, '-').replace(/[^A-Z0-9#+.-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, ''); }
 function safeRegex(pattern) { try { return pattern ? new RegExp(pattern, 'i') : null; } catch { return null; } }
 function normalizedRating(value) { return text(value).replace(/#/g, '').trim().toUpperCase(); }
@@ -150,7 +174,20 @@ function sameBoreRatingInterpolationFallback({ rows, context, config, wantedRati
 function enrichWeightCandidate({ candidate, nodeHint, semanticSource, xmlLengthMm, toleranceMm, config, wantedRating, boreMm }) { const lengthDelta = Number.isFinite(candidate.lengthDelta) ? candidate.lengthDelta : Math.abs(Number(candidate.rowLength) - Number(xmlLengthMm)); const boreDelta = Number.isFinite(candidate.boreDelta) ? candidate.boreDelta : Math.abs(Number(candidate.rowBore) - Number(boreMm)); const ratingExact = candidate.rowRating === wantedRating; const ratingPartial = !ratingExact && candidate.rowRating && wantedRating && (candidate.rowRating.includes(wantedRating) || wantedRating.includes(candidate.rowRating)); const ratingScore = ratingExact ? 1 : (ratingPartial ? 0.65 : 0); const lengthQualified = Number.isFinite(lengthDelta) && lengthDelta <= toleranceMm; const candidateClass = classifyWeightMasterCandidate(candidate); const semantic = scoreSemanticSource(semanticSource, candidate, config); const oldHintSemantic = semantic.tier ? semantic : scoreValveHintAgainstCandidate(nodeHint, candidateClass, candidate); const weightInfo = resolveCandidateWeight(candidate, xmlLengthMm, config); const boreScore = Math.max(0, 1 - Math.min(boreDelta / Math.max(Math.abs(Number(boreMm)) * 0.25, 25), 1)); const lengthScore = 1 - Math.min(lengthDelta / Math.max(toleranceMm, 1), 1); const score = ((ratingScore * 3) + (boreScore * 2) + lengthScore) / 6; return { ...candidate, ...weightInfo, lengthDelta, boreDelta, ratingExact, ratingScore, score, candidateClass, lengthQualified, lengthToleranceMm: toleranceMm, nodeValveHint: nodeHint, valveHintLabel: formatValveHint(nodeHint), semanticTier: lengthQualified ? oldHintSemantic.tier : 0, semanticPotentialTier: oldHintSemantic.tier, semanticReason: oldHintSemantic.reason, semanticSource: semanticSource?.source || '', rejectedReason: lengthQualified ? '' : `length failed, Δ${lengthDelta.toFixed(1)}mm > ±${toleranceMm}mm`, preferred: ratingExact && boreDelta < 1 && lengthQualified && Number(weightInfo.selectedWeight) > 0 }; }
 export function compareRankedWeightCandidates(a, b) { return (b.semanticTier - a.semanticTier) || (Number(b.preferred) - Number(a.preferred)) || (b.score - a.score) || (a.lengthDelta - b.lengthDelta) || (a.boreDelta - b.boreDelta); }
 export function compareRejectedWeightCandidates(a, b) { return (b.semanticPotentialTier - a.semanticPotentialTier) || (a.lengthDelta - b.lengthDelta) || (b.score - a.score) || (a.boreDelta - b.boreDelta); }
-export function rankXmlCiiWeightCandidates(context, config, options = {}) { ensureValveHintConfig(config || {}); const { boreMm, rating, lengthMm, nodeName = '' } = context || {}; if (boreMm === null || boreMm === undefined || lengthMm === null || lengthMm === undefined) return { nodeHint: null, candidates: [], rejectedCandidates: [], best: null }; const rows = Array.isArray(config?.weight?.masterRows) ? config.weight.masterRows : []; const wantedRating = normalizedRating(rating); const nodeHint = useNodeNameValveHints(config) ? resolveNodeNameValveHint(nodeName, config) : null; const semanticSource = semanticSourceForContext(context, nodeHint, config); if (!rows.length) { const zero = zeroWeightFallback({ boreMm, wantedRating, lengthMm, nodeHint }); return { nodeHint, semanticSource, candidates: [zero], rejectedCandidates: [], best: zero }; } const toleranceMm = valveHintLengthToleranceMm(config); const includeRejected = options.includeRejected !== false && config?.weight?.showLengthRejectedSemanticMatches !== false; const ranked = []; const rejected = []; for (const row of rows) { const base = baseCandidateFromRow(row, config, lengthMm); if (!base) continue; const boreDelta = Math.abs(base.rowBore - Number(boreMm)); if (!Number.isFinite(boreDelta) || boreDelta >= 1) continue; const ratingExact = base.rowRating === wantedRating; const ratingPartial = !ratingExact && base.rowRating && wantedRating && (base.rowRating.includes(wantedRating) || wantedRating.includes(base.rowRating)); if (!ratingExact && !ratingPartial) continue; const enriched = enrichWeightCandidate({ candidate: { ...base, boreDelta }, nodeHint, semanticSource, xmlLengthMm: lengthMm, toleranceMm, config, wantedRating, boreMm }); if (enriched.lengthQualified) ranked.push(enriched); else if (includeRejected && enriched.semanticPotentialTier > 0) rejected.push(enriched); } const special = specialValveFactorCandidate({ rows, context: { ...(context || {}), boreMm, lengthMm }, config, wantedRating, nodeHint, toleranceMm }); if (special) ranked.push(special); ranked.sort(compareRankedWeightCandidates); rejected.sort(compareRejectedWeightCandidates); if (!ranked.length) { const fallback = sameBoreRatingInterpolationFallback({ rows, context, config, wantedRating, nodeHint, toleranceMm }); if (fallback) ranked.push(fallback); } return { nodeHint, semanticSource, candidates: ranked, rejectedCandidates: rejected, best: ranked[0] || null }; }
+function rankXmlCiiWeightCandidatesCore(context, config, options = {}) { ensureValveHintConfig(config || {}); const { boreMm, rating, lengthMm, nodeName = '' } = context || {}; if (boreMm === null || boreMm === undefined || lengthMm === null || lengthMm === undefined) return { nodeHint: null, candidates: [], rejectedCandidates: [], best: null }; const rows = Array.isArray(config?.weight?.masterRows) ? config.weight.masterRows : []; const wantedRating = normalizedRating(rating); const nodeHint = useNodeNameValveHints(config) ? resolveNodeNameValveHint(nodeName, config) : null; const semanticSource = semanticSourceForContext(context, nodeHint, config); if (!rows.length) { const zero = zeroWeightFallback({ boreMm, wantedRating, lengthMm, nodeHint }); return { nodeHint, semanticSource, candidates: [zero], rejectedCandidates: [], best: zero }; } const toleranceMm = valveHintLengthToleranceMm(config); const includeRejected = options.includeRejected !== false && config?.weight?.showLengthRejectedSemanticMatches !== false; const ranked = []; const rejected = []; for (const row of rows) { const base = baseCandidateFromRow(row, config, lengthMm); if (!base) continue; const boreDelta = Math.abs(base.rowBore - Number(boreMm)); if (!Number.isFinite(boreDelta) || boreDelta >= 1) continue; const ratingExact = base.rowRating === wantedRating; const ratingPartial = !ratingExact && base.rowRating && wantedRating && (base.rowRating.includes(wantedRating) || wantedRating.includes(base.rowRating)); if (!ratingExact && !ratingPartial) continue; const enriched = enrichWeightCandidate({ candidate: { ...base, boreDelta }, nodeHint, semanticSource, xmlLengthMm: lengthMm, toleranceMm, config, wantedRating, boreMm }); if (enriched.lengthQualified) ranked.push(enriched); else if (includeRejected && enriched.semanticPotentialTier > 0) rejected.push(enriched); } const special = specialValveFactorCandidate({ rows, context: { ...(context || {}), boreMm, lengthMm }, config, wantedRating, nodeHint, toleranceMm }); if (special) ranked.push(special); ranked.sort(compareRankedWeightCandidates); rejected.sort(compareRejectedWeightCandidates); if (!ranked.length) { const fallback = sameBoreRatingInterpolationFallback({ rows, context, config, wantedRating, nodeHint, toleranceMm }); if (fallback) ranked.push(fallback); } return { nodeHint, semanticSource, candidates: ranked, rejectedCandidates: rejected, best: ranked[0] || null }; }
+let weightHintRankCalls = 0;
+export function rankXmlCiiWeightCandidates(context, config, options = {}) {
+  // One mark per 256 calls avoids making profiling itself a hot path.
+  const sample = (++weightHintRankCalls % 256) === 0;
+  const perf = sample && typeof performance !== 'undefined' ? performance : null;
+  perf?.mark?.('xml-cii:weight-hints:rank:start');
+  try { return rankXmlCiiWeightCandidatesCore(context, config, options); }
+  finally {
+    perf?.mark?.('xml-cii:weight-hints:rank:end');
+    perf?.measure?.('xml-cii:weight-hints:rank',
+      'xml-cii:weight-hints:rank:start', 'xml-cii:weight-hints:rank:end');
+  }
+}
 export function buildRankedWeightCandidates(context, config) { return rankXmlCiiWeightCandidates(context, config, { includeRejected: false }).candidates.slice(0, 8); }
 
 export function tokenizeString(str) {
