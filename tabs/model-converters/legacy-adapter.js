@@ -6765,6 +6765,7 @@ export function renderModelConvertersTab(container) {
   }
 
   let xmlCiiConfigSaveGeneration = 0;
+  let xmlCiiPendingFetchSave = null;
   function xmlCiiSaveConfig(config, { compact = false, background = false } = {}) {
     const generation = ++xmlCiiConfigSaveGeneration;
     if (background && typeof Worker === 'function') {
@@ -6782,7 +6783,7 @@ export function renderModelConvertersTab(container) {
         ...defaultsByConverter,
         [selectedConverter]: { ...previous, supportConfigJson: '' },
       };
-      return new Promise((resolve, reject) => {
+      const pendingSave = new Promise((resolve, reject) => {
         const terminate = () => { try { worker.terminate(); } catch {} };
         worker.onmessage = ({ data }) => {
           if (data?.generation !== generation) return;
@@ -6815,6 +6816,12 @@ export function renderModelConvertersTab(container) {
             defaultsByConverter: snapshot });
         } catch (error) { terminate(); reject(error); }
       });
+      xmlCiiPendingFetchSave = pendingSave;
+      pendingSave.then(
+        () => { if (xmlCiiPendingFetchSave === pendingSave) xmlCiiPendingFetchSave = null; },
+        () => { if (xmlCiiPendingFetchSave === pendingSave) xmlCiiPendingFetchSave = null; },
+      );
+      return pendingSave;
     }
     const perf = typeof performance !== 'undefined' ? performance : null;
     perf?.mark?.('xml-cii:popup:config-save:start');
@@ -9507,6 +9514,15 @@ export function renderModelConvertersTab(container) {
   });
 
   runBtnEl.addEventListener('click', async () => {
+    if (selectedConverter === 'xml_to_cii' && xmlCiiPendingFetchSave) {
+      // Fetch is visually complete before worker persistence completes.
+      // Run must use the updated full config rather than stale activeValues.
+      try { await xmlCiiPendingFetchSave; }
+      catch (error) {
+        notify({ level: 'error', title: 'XML->CII config save', message: String(error?.message || error) });
+        return;
+      }
+    }
     if (selectedConverter === 'xml_to_cii') {
       const runConfig = xmlCiiConfigWithLoadedMasterRows('XML->CII Run preflight');
       const missing = missingPersistedXmlCiiMasters(runConfig);
