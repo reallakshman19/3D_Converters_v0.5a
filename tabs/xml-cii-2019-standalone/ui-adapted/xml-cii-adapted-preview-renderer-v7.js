@@ -284,17 +284,7 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
   await buildLegacyPreview(rootEl, xmlText, config, delegatedOptions);
   if (!isCurrent() || committed) return;
 
-  let authority = null;
-  let reason = 'explicit Build/Rebuild required';
-  try {
-    authority = await createPreviewCacheAuthority({
-      xmlText,
-      stagedJsonText: stagedSource.text,
-      config,
-    });
-  } catch (error) {
-    reason = text(error?.message || error);
-  }
-  if (!isCurrent()) return;
-  addCacheEvidence(host, { status: 'MISS', authority, reason });
+  // There is no engineering Preview to hash yet. In particular, do not
+  // delay readiness of the first clickable Build on SHA-256 of input-only data.
+  addCacheEvidence(host, { status: 'MISS', reason: 'explicit Build/Rebuild required' });
 }
