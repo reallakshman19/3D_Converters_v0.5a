@@ -134,7 +134,9 @@ const CHECK = String.raw`(async () => {
   const host = document.createElement('section');
   host.dataset.r8PopupProbe = 'true';
   document.body.appendChild(host);
-  const tab = await import('/tabs/model-converters/ModelConvertersTab.js?v=20260816-cii-v11-v14-dropdown-release-4');
+  // CDP Runtime.evaluate has no module base URL. Use an absolute URL
+  // anchored to the actual page, after document completion.
+  const tab = await import(new URL('/tabs/model-converters/ModelConvertersTab.js?v=20260816-cii-v11-v14-dropdown-release-4', location.href).href);
   tab.renderModelConvertersTab(host, {});
   // A fresh Chrome profile defaults to rvm_to_rev. Select the real XML->CII
   // converter before looking for its workflow launcher.
@@ -144,7 +146,7 @@ const CHECK = String.raw`(async () => {
   converterSelect.dispatchEvent(new Event('change', { bubbles: true }));
   if (converterSelect.value !== 'xml_to_cii') throw Error('Failed to select xml_to_cii');
   await waitFor(() => !!host.querySelector('#model-converters-xml-cii-workflow-btn'), 'workflow launcher');
-  const bridgeModule = await import('/tabs/model-converters/xml-cii-workflow-bridge.js?v=20260708-workflow-bridge-align-1');
+  const bridgeModule = await import(new URL('/tabs/model-converters/xml-cii-workflow-bridge.js?v=20260708-workflow-bridge-align-1', location.href).href);
   await waitFor(() => !!bridgeModule.xmlCiiWorkflowGetBridge(), 'single shared phase bridge');
   const bridge = bridgeModule.xmlCiiWorkflowGetBridge();
   if (!bridge || typeof bridge.renderPhaseInto !== 'function')
@@ -178,7 +180,7 @@ const BM2_CHECK = String.raw`(async () => {
     if (!response.ok) throw Error('BM2 input missing: ' + url);
     return response.text();
   }));
-  const bridgeModule = await import('/tabs/model-converters/xml-cii-workflow-bridge.js?v=20260708-workflow-bridge-align-1');
+  const bridgeModule = await import(new URL('/tabs/model-converters/xml-cii-workflow-bridge.js?v=20260708-workflow-bridge-align-1', location.href).href);
   const bridge = bridgeModule.xmlCiiWorkflowGetBridge();
   if (!bridge || typeof bridge.importPopupConfigText !== 'function')
     throw Error('BM2 check requires the real popup config-import bridge');
@@ -210,8 +212,10 @@ const BM2_CHECK = String.raw`(async () => {
     if (!phaseTab) throw Error('Popup Step 4 Preview tab missing');
     const visitStart = performance.now();
     phaseTab.click();
+    // First visit may await shard hydration. Do not mistake that for a
+    // Build/Fetch budget failure: report it separately in firstVisitMs.
     await wait(() => !!document.querySelector('#mc-preview-table-host [data-mc-preview-build]'),
-      'popup Step 4', 60000);
+      'popup Step 4', __MAX_FIRST_VISIT_MS__);
     phase.firstVisitMs = performance.now() - visitStart;
     const host = document.querySelector('#mc-preview-table-host');
     if (!host) throw Error('V7 Preview host missing');
@@ -220,7 +224,7 @@ const BM2_CHECK = String.raw`(async () => {
     build.click();
     await wait(() => host.dataset.mcPreviewBuildCompleted === 'true'
       && !!host.querySelector('table[data-resizable-table="branch-preview"]'),
-      'popup Build', 60000);
+      'popup Build', __MAX_BUILD_MS__);
     phase.buildMs = performance.now() - buildStart;
     if (phase.buildMs > __MAX_BUILD_MS__)
       throw Error('BM2 popup Build exceeded budget: ' + Math.round(phase.buildMs) + ' ms');
@@ -229,7 +233,7 @@ const BM2_CHECK = String.raw`(async () => {
     const fetchStart = performance.now();
     fetchButton.click();
     await wait(() => !!host.querySelector('[data-mc-dtxr-rating-notice]')
-      && host.dataset.mcPreviewBuildCompleted === 'true', 'Fetch Rating', 60000);
+      && host.dataset.mcPreviewBuildCompleted === 'true', 'Fetch Rating', __MAX_FETCH_MS__);
     phase.fetchRatingMs = performance.now() - fetchStart;
     if (phase.fetchRatingMs > __MAX_FETCH_MS__)
       throw Error('BM2 Fetch Rating exceeded budget: ' + Math.round(phase.fetchRatingMs) + ' ms');
@@ -271,9 +275,10 @@ async function main() {
     if (result?.status !== 'PASS' || !result.bridgeNonNull || !result.popupOpen)
       throw Error('Popup browser contract failed: ' + JSON.stringify(result));
     if (bm2Files) {
-      const budget = BM2_CHECK.replace('__MAX_BUILD_MS__', String(Number(arg('max-build-ms') || 15000)))
-        .replace('__MAX_FETCH_MS__', String(Number(arg('max-fetch-ms') || 30000)))
-        .replace('__MAX_STORAGE_BYTES__', String(Number(arg('max-storage-bytes') || 1000000)));
+      const budget = BM2_CHECK.replaceAll('__MAX_BUILD_MS__', String(Number(arg('max-build-ms') || 15000)))
+        .replaceAll('__MAX_FETCH_MS__', String(Number(arg('max-fetch-ms') || 30000)))
+        .replaceAll('__MAX_FIRST_VISIT_MS__', String(Number(arg('max-first-visit-ms') || 420000)))
+        .replaceAll('__MAX_STORAGE_BYTES__', String(Number(arg('max-storage-bytes') || 1000000)));
       result.bm2Budget = await evaluate(ws, budget);
       if (result.bm2Budget?.status !== 'PASS') throw Error('BM2 budget check did not pass');
     }
