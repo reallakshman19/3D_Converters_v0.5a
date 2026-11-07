@@ -4,6 +4,10 @@ function pickText(row, keys) { for (const key of keys || []) { const value = row
 // Memoize only primitive field parsing. The selected raw field value is checked
 // on every lookup, so edits to a master row invalidate the entry automatically.
 const numericMasterFields = new WeakMap();
+let numericMasterFieldHits = 0;
+export function readXmlCiiWeightNumberMemoStats() {
+  return { hits: numericMasterFieldHits };
+}
 const masterNumberPattern = /-?\d+(?:\.\d+)?/;
 function pickNumber(row, keys) {
   let cachedFields = row && typeof row === 'object' ? numericMasterFields.get(row) : null;
@@ -15,8 +19,10 @@ function pickNumber(row, keys) {
     const eligible = raw === null || raw === undefined || ['string', 'number', 'boolean'].includes(typeof raw);
     const entry = eligible ? cachedFields?.get(key) : null;
     let value;
-    if (entry && Object.is(entry.raw, raw)) value = entry.number;
-    else {
+    if (entry && Object.is(entry.raw, raw)) {
+      numericMasterFieldHits += 1;
+      value = entry.number;
+    } else {
       const match = text(raw).replace(/,/g, '').match(masterNumberPattern);
       const parsed = match ? Number(match[0]) : NaN;
       value = Number.isFinite(parsed) ? parsed : null;

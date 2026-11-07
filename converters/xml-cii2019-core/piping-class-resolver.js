@@ -32,6 +32,10 @@ export const DEFAULT_PIPING_CLASS_MATCH_CONFIG = Object.freeze({
 // thousands of row comparisons. Never cache objects or mutable master rows.
 const normalizedClassStrings = new Map();
 const PIPE_CLASS_CACHE_LIMIT = 16384;
+let normalizeClassMemoHits = 0;
+export function readPipingClassNormalizerMemoStats() {
+  return { hits: normalizeClassMemoHits, size: normalizedClassStrings.size };
+}
 const indexedClassWork = new WeakMap();
 function text(value) { return value === undefined || value === null ? '' : String(value).trim(); }
 function number(value) {
@@ -42,7 +46,10 @@ function number(value) {
 
 export function normalizePipingClass(value) {
   const raw = text(value);
-  if (normalizedClassStrings.has(raw)) return normalizedClassStrings.get(raw);
+  if (normalizedClassStrings.has(raw)) {
+    normalizeClassMemoHits += 1;
+    return normalizedClassStrings.get(raw);
+  }
   const result = raw.toUpperCase().replace(/^=/, '').replace(/\s+/g, '').replace(/[^A-Z0-9]/g, '');
   if (normalizedClassStrings.size >= PIPE_CLASS_CACHE_LIMIT) normalizedClassStrings.clear();
   normalizedClassStrings.set(raw, result);
