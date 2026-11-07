@@ -138,6 +138,7 @@ export function loadStoredState() {
 // Fetch can execute this on a dedicated worker to keep large master-table
 // serialization off the browser's main thread.
 export function prepareStoredStatePayload(selectedConverter, defaultsByConverter) {
+  const MAX_WRITE_BYTES = 1_000_000;
   const xmlConfigSize = Object.values(defaultsByConverter || {}).reduce(
     (sum, value) => sum + (typeof value?.supportConfigJson === 'string' ? value.supportConfigJson.length : 0), 0);
   // First omit only reproducible lite-autoload defaults; keep Owner imports.
