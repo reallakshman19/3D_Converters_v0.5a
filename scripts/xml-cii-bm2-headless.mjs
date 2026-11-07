@@ -82,13 +82,13 @@ const buildMeasures = measures.filter(entry => blockingBuildPhases.has(entry.nam
 const backgroundAuthority = measures.filter(entry =>
   entry.name === 'xml-cii:popup:build:authority');
 const dryrunSources = {
-  'xml-cii:dryrun:parse': 'preview-dryrun-core.js:411-416',
-  'xml-cii:dryrun:cleanup': 'preview-dryrun-core.js:424-441',
-  'xml-cii:dryrun:index': 'preview-dryrun-core.js:443-452',
-  'xml-cii:dryrun:lineLookup': 'preview-dryrun-core.js:454-471',
-  'xml-cii:dryrun:branchResolve': 'preview-dryrun-core.js:472-486',
-  'xml-cii:dryrun:dtxrWall': 'preview-dryrun-core.js:515-519',
-  'xml-cii:dryrun:nodeRows': 'preview-dryrun-core.js:588-591',
+  'xml-cii:dryrun:parse': 'preview-dryrun-core.js:417-440',
+  'xml-cii:dryrun:cleanup': 'preview-dryrun-core.js:441-456',
+  'xml-cii:dryrun:index': 'preview-dryrun-core.js:457-466',
+  'xml-cii:dryrun:lineLookup': 'preview-dryrun-core.js:468-490',
+  'xml-cii:dryrun:branchResolve': 'preview-dryrun-core.js:491-508',
+  'xml-cii:dryrun:dtxrWall': 'preview-dryrun-core.js:530-539',
+  'xml-cii:dryrun:nodeRows': 'preview-dryrun-core.js:605-607',
 };
 // Separate non-overlapping cost buckets from diagnostic subspans.
 const latestDryrun = new Map();
