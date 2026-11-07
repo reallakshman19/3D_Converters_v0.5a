@@ -72,7 +72,7 @@ function ratingFetchMessage(result) {
   return parts.join(' ') || 'No unambiguous DTXR Rating evidence was available.';
 }
 
-function installDtxrRatingAction({ host, rootEl, xmlText, config, options, branchRows }) {
+export function installDtxrRatingAction({ host, rootEl, xmlText, config, options, branchRows }) {
   if (!host || !Array.isArray(branchRows) || !branchRows.length) return;
   const actionBar = host.querySelector?.('[data-mc-preview-build]')?.parentElement;
   if (!actionBar || actionBar.querySelector('[data-mc-dtxr-rating-fetch]')) return;
