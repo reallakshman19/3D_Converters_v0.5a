@@ -186,7 +186,7 @@ export function resolveApproximatePipingClass({ requestedClass, knownClasses, pi
   const cached = !knownClasses && pipingClassIndex && indexedClassWork.get(pipingClassIndex);
   const allClasses = cached?.knownClasses || uniqueClasses(knownClasses || knownClassesFromIndex(pipingClassIndex));
   const candidateKey = normalizePipingClass(rawRequested);
-  let candidateClasses = cached?.families.get(candidateKey);
+  let candidateClasses = cached?.families?.get(candidateKey);
   if (!candidateClasses) {
     candidateClasses = familyCandidates(rawRequested, allClasses);
     if (cached) cached.families.set(candidateKey, candidateClasses);
