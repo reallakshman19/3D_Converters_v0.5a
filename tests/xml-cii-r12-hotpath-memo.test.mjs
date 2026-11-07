@@ -60,3 +60,15 @@ test('R12 E3 Fetch Rating has independently measurable apply/save/rebuild phases
   assert.match(adapter, /if \(Object\.is\(values\[field\.key\], next\)\) return;/,
     'mutant removes duplicate-write suppression: RED');
 });
+
+test('R12 E3 v7 Fetch save uses compact but semantically identical config serialization', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const src = await readFile(new URL('../tabs/model-converters/legacy-adapter.js', import.meta.url), 'utf8');
+  assert.match(src, /function xmlCiiSaveConfig\(config, \{ compact = false \} = \{\}\)/);
+  assert.match(src, /JSON\.stringify\(config, null, compact \? 0 : 2\)/);
+  assert.match(src, /xmlCiiBuildAndRenderPreviewV7\(target, xmlText, config,[\s\S]{0,170}onSaveConfig: \(newConfig\) => xmlCiiSaveConfig\(newConfig, \{ compact: true \}\)/);
+  const sample = { linelist: { masterRows: [{ lineNo: 'L01' }] },
+    overrides: { rating: { '/GLRD/B6': '150' } }, pipingClass: { masterRows: [{ class: 'P4110001' }] } };
+  assert.deepEqual(JSON.parse(JSON.stringify(sample, null, 0)),
+    JSON.parse(JSON.stringify(sample, null, 2)));
+});

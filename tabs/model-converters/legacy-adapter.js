@@ -6763,11 +6763,14 @@ export function renderModelConvertersTab(container) {
     } catch {}
   }
 
-  function xmlCiiSaveConfig(config) {
+  function xmlCiiSaveConfig(config, { compact = false } = {}) {
     const perf = typeof performance !== 'undefined' ? performance : null;
     perf?.mark?.('xml-cii:popup:config-save:start');
     try {
-      activeValues().supportConfigJson = JSON.stringify(config, null, 2);
+      // Fetch Rating persists the identical data in compact JSON: avoid
+      // serializing and assigning a multi-megabyte indented textarea twice.
+      // Other config edits retain their existing pretty-printed form.
+      activeValues().supportConfigJson = JSON.stringify(config, null, compact ? 0 : 2);
       xmlCiiPersistLargeConfigChange('XML->CII config');
       xmlCiiRenderAdvancedWhenConfigFits();
       _xmlCiiSyncConfigTextarea();
@@ -7865,7 +7868,7 @@ export function renderModelConvertersTab(container) {
       if (!target.isConnected || target.querySelector('#mc-preview-table-host') !== host) return;
       const config = xmlCiiConfigWithLoadedMasterRows('XML->CII popup v7 preview');
       await xmlCiiBuildAndRenderPreviewV7(target, xmlText, config, {
-        onSaveConfig: (newConfig) => xmlCiiSaveConfig(newConfig),
+        onSaveConfig: (newConfig) => xmlCiiSaveConfig(newConfig, { compact: true }),
         openOverridePopup: _xmlCiiOpenPreviewOverridePopup,
         ensureOverrides: xmlCiiEnsureOverrides,
         resolveStagedJsonText: (nextConfig) => xmlCiiCurrentStagedJsonSource(nextConfig),
