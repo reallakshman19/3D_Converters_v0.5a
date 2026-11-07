@@ -211,6 +211,7 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
   const delegatedOptions = {
     ...options,
     __previewGeneration: generation,
+    __resolvedStagedSource: stagedSource,
     stagedJsonText: stagedSource.text,
     stagedSourceLabel: stagedSource.label,
     // Resolve afresh for manual builds; the initial idle source may have changed.
