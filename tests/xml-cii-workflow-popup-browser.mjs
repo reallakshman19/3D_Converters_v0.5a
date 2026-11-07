@@ -292,8 +292,26 @@ const BM2_CHECK = String.raw`(async () => {
       try {
         await new Promise(ok => setTimeout(ok, 100));
         run.click();
-        await wait(() => !!document.querySelector('#model-converters-output [data-output-index]'),
-          'BM2 Run output', __MAX_RUN_MS__);
+        // The production runner may request human review of 175 zero-weight
+        // rigid nodes. Evidence mode must not hang on that modal. Choose the
+        // existing explicit Skip Review action: it leaves zero weights unchanged
+        // and continues the engine; never fabricate or hash Preview XML.
+        const runStart = performance.now();
+        let skippedReview = false;
+        while (!document.querySelector('#model-converters-output [data-output-index]')) {
+          const skip = document.querySelector('.mc-rigid-review-overlay [data-rigid-review-skip]');
+          if (skip) {
+            skip.click();
+            skippedReview = true;
+          }
+          if (performance.now() - runStart > __MAX_RUN_MS__)
+            throw Error('BM2 engine output timed out after ' +
+              Math.round(performance.now() - runStart) + ' ms' +
+              (skippedReview ? ' (rigid review skipped)' : ''));
+          await new Promise(ok => setTimeout(ok, 200));
+        }
+        phase.rigidReviewSkipped = skippedReview;
+        phase.outputSource = 'production converter output Download';
         const downloads = [...document.querySelectorAll('#model-converters-output [data-output-index]')];
         const enriched = downloads.find(button => /enrich.*\.xml$/i.test(
           button.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || ''
