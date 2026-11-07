@@ -46,14 +46,14 @@ test('R12 E3: repeated master weight numeric parsing hits memo and row edits inv
     'a changed field must invalidate the memo; returning stale weight must turn RED');
 });
 
-test('R12 E3 Fetch Rating has independently measurable apply/save/rebuild phases', async () => {
+test('R13 G1 Fetch Rating retains apply and deferred-save marks after removing redundant rebuild', async () => {
   const { readFile } = await import('node:fs/promises');
   const [wrapper, hydrator, adapter] = await Promise.all([
     readFile(new URL('../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer-v7.js', import.meta.url), 'utf8'),
     readFile(new URL('../tabs/xml-cii-effective-class-shard-hydrator.js', import.meta.url), 'utf8'),
     readFile(new URL('../tabs/model-converters/legacy-adapter.js', import.meta.url), 'utf8'),
   ]);
-  for (const phase of ['fetch-apply', 'fetch-save', 'fetch-rebuild'])
+  for (const phase of ['fetch-apply', 'fetch-save'])
     assert.ok(wrapper.includes('xml-cii:popup:' + phase + ':start'));
   assert.match(hydrator, /xml-cii:shard:config-serialize/);
   assert.match(hydrator, /xml-cii:shard:config-dispatch/);
