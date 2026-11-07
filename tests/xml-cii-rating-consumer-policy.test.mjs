@@ -8,7 +8,8 @@ test('Preview exposes the explicit DTXR Rating fetch action', async () => {
   const source = await read('tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer-v7.js');
   assert.match(source, /Fetch Rating as per DTXR/);
   assert.match(source, /applyPreviewDtxrRatingOverrides/);
-  assert.match(source, /forceBuild:\s*true/);
+  assert.doesNotMatch(source, /fetch-rebuild:start/);
+  assert.match(source, /xml-cii:popup:fetch-click-to-notice/);
 });
 
 test('run review does not auto-populate Rating from DTXR or defaults', async () => {
