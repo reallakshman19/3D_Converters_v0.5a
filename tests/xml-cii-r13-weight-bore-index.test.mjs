@@ -26,7 +26,9 @@ test('G2: scoped bore index preserves ranked candidates and master order', () =>
   const empty = rankXmlCiiWeightCandidates(context, config, {
     includeRejected: true, candidateRows: [],
   });
-  assert.equal(empty.best, null, 'ranker must actually consume scoped candidates');
+  assert.equal(empty.best?.zeroFallback, true, 'empty candidate scope returns the explicit zero-weight review fallback');
+  assert.notEqual(empty.best?.weight, indexed.best?.weight,
+    'ignoring candidateRows would wrongly return the 42 kg master candidate');
   // Behavior mutants: ignoring candidateRows breaks the empty-index assertion;
   // wrong bore filtering breaks the selected weight and parity assertions.
 });
