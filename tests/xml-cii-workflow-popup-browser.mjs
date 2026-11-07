@@ -250,6 +250,25 @@ const BM2_CHECK = String.raw`(async () => {
     phase.buildMs = performance.now() - buildStart;
     if (phase.buildMs > __MAX_BUILD_MS__)
       throw Error('BM2 popup Build exceeded budget: ' + Math.round(phase.buildMs) + ' ms');
+    // Optional G4 profile collects all five action spans in the same fresh
+    // Chrome profile. The ordinary strict gate still performs only Build/Fetch.
+    if (__REPORT_ALL__) {
+      const rebuild = async (metric) => {
+        const button = host.querySelector('[data-mc-preview-build]');
+        if (!button) throw Error('Missing Rebuild button for ' + metric);
+        const started = performance.now();
+        host.dataset.mcPreviewBuildCompleted = 'false';
+        button.click();
+        await wait(() => host.dataset.mcPreviewBuildCompleted === 'true'
+          && !!host.querySelector('table[data-resizable-table="branch-preview"]'),
+          metric, __MAX_REBUILD_MS__);
+        phase[metric] = performance.now() - started;
+      };
+      // Idle is measured separately from the CPU budget of the next click.
+      await new Promise(ok => setTimeout(ok, 1500));
+      await rebuild('buildAfterIdleMs');
+      await rebuild('rebuildMs');
+    }
     const fetchButton = host.querySelector('[data-mc-dtxr-rating-fetch]');
     if (!fetchButton) throw Error('Fetch Rating as per DTXR button missing');
     const fetchStart = performance.now();
@@ -259,6 +278,40 @@ const BM2_CHECK = String.raw`(async () => {
     phase.fetchRatingMs = performance.now() - fetchStart;
     if (phase.fetchRatingMs > __MAX_FETCH_MS__)
       throw Error('BM2 Fetch Rating exceeded budget: ' + Math.round(phase.fetchRatingMs) + ' ms');
+    if (__CAPTURE_OUTPUT__) {
+      // Capture the *actual* converter output, via its production Download
+      // button; hashing an input, synthetic XML, or Preview rows is not valid.
+      const run = document.querySelector('#model-converters-run');
+      if (!run) throw Error('Main XML->CII Run button missing');
+      const created = [];
+      const realCreate = URL.createObjectURL.bind(URL);
+      URL.createObjectURL = (blob) => { created.push(blob); return realCreate(blob); };
+      try {
+        await new Promise(ok => setTimeout(ok, 100));
+        run.click();
+        await wait(() => !!document.querySelector('#model-converters-output [data-output-index]'),
+          'BM2 Run output', __MAX_RUN_MS__);
+        const downloads = [...document.querySelectorAll('#model-converters-output [data-output-index]')];
+        const enriched = downloads.find(button => /enrich.*\\.xml$/i.test(
+          button.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || ''
+        )) || downloads.find(button => /\\.xml$/i.test(
+          button.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || ''
+        ));
+        if (!enriched) throw Error('No XML output to hash; output list: ' +
+          downloads.map(button => button.closest('.model-converters-output-row')?.querySelector('strong')?.textContent).join(', '));
+        enriched.click();
+        const blob = created.at(-1);
+        if (!blob) throw Error('Output Download did not supply a Blob');
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const digest = await crypto.subtle.digest('SHA-256', bytes);
+        phase.outputBytes = bytes.byteLength;
+        phase.outputSha256 = [...new Uint8Array(digest)]
+          .map(byte => byte.toString(16).padStart(2, '0')).join('');
+        phase.outputFile = enriched.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || '';
+      } finally {
+        URL.createObjectURL = realCreate;
+      }
+    }
   } finally {
     Storage.prototype.setItem = originalSetItem;
   }
@@ -298,7 +351,11 @@ async function main() {
     if (result?.status !== 'PASS' || !result.bridgeNonNull || !result.popupOpen)
       throw Error('Popup browser contract failed: ' + JSON.stringify(result));
     if (bm2Files) {
-      const budget = BM2_CHECK.replaceAll('__MAX_BUILD_MS__', String(Number(arg('max-build-ms') || 15000)))
+      const budget = BM2_CHECK.replaceAll('__REPORT_ALL__', String(arg('report-all') === 'true'))
+        .replaceAll('__CAPTURE_OUTPUT__', String(arg('capture-output') === 'true'))
+        .replaceAll('__MAX_REBUILD_MS__', String(Number(arg('max-rebuild-ms') || 120000)))
+        .replaceAll('__MAX_RUN_MS__', String(Number(arg('max-run-ms') || 420000)))
+        .replaceAll('__MAX_BUILD_MS__', String(Number(arg('max-build-ms') || 15000)))
         .replaceAll('__MAX_FETCH_MS__', String(Number(arg('max-fetch-ms') || 30000)))
         .replaceAll('__MAX_FIRST_VISIT_MS__', String(Number(arg('max-first-visit-ms') || 420000)))
         .replaceAll('__MAX_STORAGE_BYTES__', String(Number(arg('max-storage-bytes') || 1000000)));
