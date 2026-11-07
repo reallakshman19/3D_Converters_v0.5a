@@ -9881,6 +9881,7 @@ export function renderModelConvertersTab(container) {
       else if (phaseId === 'diagnostics') html = xmlCiiRenderDiagnosticsPhase();
       else if (phaseId === 'support-mapper') html = xmlCiiRenderSupportMapperPhase();
       else if (phaseId === 'config') html = xmlCiiRenderConfigPhase();
+      if (phaseId !== 'preview') target.__xmlCiiQueuedFirstPreviewBuild = false;
       target.innerHTML = html;
       if (phaseId === 'preview') void armFirstXmlCiiPreviewBuild(target,
         () => xmlCiiInitializePopupPreviewV7(target)).catch((error) =>
