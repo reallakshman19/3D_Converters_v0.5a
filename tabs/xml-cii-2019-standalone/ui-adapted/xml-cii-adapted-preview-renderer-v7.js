@@ -89,7 +89,11 @@ function installDtxrRatingAction({ host, rootEl, xmlText, config, options, branc
     perf?.mark?.('xml-cii:popup:fetch-rating:start');
     try {
     button.disabled = true;
+    perf?.mark?.('xml-cii:popup:fetch-apply:start');
     const result = applyPreviewDtxrRatingOverrides(config, branchRows);
+    perf?.mark?.('xml-cii:popup:fetch-apply:end');
+    perf?.measure?.('xml-cii:popup:fetch-apply',
+      'xml-cii:popup:fetch-apply:start', 'xml-cii:popup:fetch-apply:end');
     const changed = result.applied > 0 || result.cleared > 0;
     if (!changed) {
       addNotice(host, ratingFetchMessage(result), true);
@@ -102,9 +106,22 @@ function installDtxrRatingAction({ host, rootEl, xmlText, config, options, branc
     host.dataset.mcPreviewBuildCompleted = 'false';
     discardPreviewCacheV7();
     try {
-      await options?.onSaveConfig?.(config);
+      perf?.mark?.('xml-cii:popup:fetch-save:start');
+      try { await options?.onSaveConfig?.(config); }
+      finally {
+        perf?.mark?.('xml-cii:popup:fetch-save:end');
+        perf?.measure?.('xml-cii:popup:fetch-save',
+          'xml-cii:popup:fetch-save:start', 'xml-cii:popup:fetch-save:end');
+      }
       if (!isCurrentPreviewBuild(rootEl, host, generation)) return;
-      await xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, { ...options, forceBuild: true, __previewGeneration: generation });
+      perf?.mark?.('xml-cii:popup:fetch-rebuild:start');
+      try {
+        await xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, { ...options, forceBuild: true, __previewGeneration: generation });
+      } finally {
+        perf?.mark?.('xml-cii:popup:fetch-rebuild:end');
+        perf?.measure?.('xml-cii:popup:fetch-rebuild',
+          'xml-cii:popup:fetch-rebuild:start', 'xml-cii:popup:fetch-rebuild:end');
+      }
       if (!isCurrentPreviewBuild(rootEl, host, generation)) return;
       addNotice(host, ratingFetchMessage(result), result.applied === 0);
     } catch (error) {

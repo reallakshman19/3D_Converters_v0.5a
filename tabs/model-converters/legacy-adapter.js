@@ -6574,7 +6574,11 @@ export function renderModelConvertersTab(container) {
       const input = advancedFieldsEl.querySelector(`[data-option-key="${field.key}"]`);
       if (!input) continue;
       const updateValue = () => {
-        values[field.key] = _readOptionValue(field, input);
+        const next = _readOptionValue(field, input);
+        // Programmatic config hydration dispatches both input and change.
+        // Avoid writing the same multi-MB defaults a second time.
+        if (Object.is(values[field.key], next)) return;
+        values[field.key] = next;
         persist();
       };
       input.addEventListener('input', updateValue);

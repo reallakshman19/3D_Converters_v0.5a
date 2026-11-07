@@ -45,3 +45,18 @@ test('R12 E3: repeated master weight numeric parsing hits memo and row edits inv
   assert.notDeepEqual(updated.best, first.best,
     'a changed field must invalidate the memo; returning stale weight must turn RED');
 });
+
+test('R12 E3 Fetch Rating has independently measurable apply/save/rebuild phases', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const [wrapper, hydrator, adapter] = await Promise.all([
+    readFile(new URL('../tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer-v7.js', import.meta.url), 'utf8'),
+    readFile(new URL('../tabs/xml-cii-effective-class-shard-hydrator.js', import.meta.url), 'utf8'),
+    readFile(new URL('../tabs/model-converters/legacy-adapter.js', import.meta.url), 'utf8'),
+  ]);
+  for (const phase of ['fetch-apply', 'fetch-save', 'fetch-rebuild'])
+    assert.ok(wrapper.includes('xml-cii:popup:' + phase + ':start'));
+  assert.match(hydrator, /xml-cii:shard:config-serialize/);
+  assert.match(hydrator, /xml-cii:shard:config-dispatch/);
+  assert.match(adapter, /if \(Object\.is\(values\[field\.key\], next\)\) return;/,
+    'mutant removes duplicate-write suppression: RED');
+});

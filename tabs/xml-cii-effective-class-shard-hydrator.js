@@ -158,11 +158,20 @@ function parseConfig(input) {
 }
 
 function writeConfig(input, config) {
+  const perf = typeof performance !== 'undefined' ? performance : null;
+  perf?.mark?.('xml-cii:shard:config-serialize:start');
   const next = JSON.stringify(config, null, 2);
+  perf?.mark?.('xml-cii:shard:config-serialize:end');
+  perf?.measure?.('xml-cii:shard:config-serialize',
+    'xml-cii:shard:config-serialize:start', 'xml-cii:shard:config-serialize:end');
   if (!input || input.value === next) return false;
+  perf?.mark?.('xml-cii:shard:config-dispatch:start');
   input.value = next;
   input.dispatchEvent(new Event('input', { bubbles: true }));
   input.dispatchEvent(new Event('change', { bubbles: true }));
+  perf?.mark?.('xml-cii:shard:config-dispatch:end');
+  perf?.measure?.('xml-cii:shard:config-dispatch',
+    'xml-cii:shard:config-dispatch:start', 'xml-cii:shard:config-dispatch:end');
   return true;
 }
 
