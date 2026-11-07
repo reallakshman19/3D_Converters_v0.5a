@@ -6791,15 +6791,23 @@ export function renderModelConvertersTab(container) {
           if (generation !== xmlCiiConfigSaveGeneration) { resolve('superseded'); return; }
           if (data.error) { reject(new Error(data.error)); return; }
           try {
+            const perf = typeof performance !== 'undefined' ? performance : null;
+            perf?.mark?.('xml-cii:popup:fetch-worker-commit:start');
             writePreparedStoredState(data.payload);
             activeValues().supportConfigJson = data.fullJson;
             clearXmlCiiFetchedRatingsJournal();
+            perf?.mark?.('xml-cii:popup:fetch-worker-commit:end');
+            perf?.measure?.('xml-cii:popup:fetch-worker-commit',
+              'xml-cii:popup:fetch-worker-commit:start', 'xml-cii:popup:fetch-worker-commit:end');
             // Do not concatenate serialization, storage and textarea DOM work
             // into one long main-thread Fetch task.
             const updateUi = () => {
               if (generation !== xmlCiiConfigSaveGeneration) return;
               xmlCiiRenderAdvancedWhenConfigFits();
-              _xmlCiiSyncConfigTextarea();
+              setTimeout(() => {
+                if (generation !== xmlCiiConfigSaveGeneration) return;
+                _xmlCiiSyncConfigTextarea();
+              }, 0);
             };
             if (typeof requestAnimationFrame === 'function')
               requestAnimationFrame(() => setTimeout(updateUi, 0));
