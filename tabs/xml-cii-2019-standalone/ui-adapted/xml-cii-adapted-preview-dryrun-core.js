@@ -4,7 +4,7 @@
 import { deriveLineKeyFromBranchName, tokenAtPosition } from '../../../converters/xml-cii2019-core/regex-line-key.js';
 import { computeLineNoKey, normalizeLineListRow } from '../../../converters/xml-cii2019-core/linelist-mapping.js';
 import { xmlCiiWeightReviewNodeOverrideKey, isXmlCiiWeightReviewNode, xmlCiiNumberText } from '../../../converters/xml-cii2019-core/weight-match-model.js';
-import { rankXmlCiiWeightCandidates, formatValveHint } from '../../../converters/xml-cii2019-core/weight-valve-hints.js';
+import { rankXmlCiiWeightCandidates, createXmlCiiWeightBoreIndex, formatValveHint } from '../../../converters/xml-cii2019-core/weight-valve-hints.js';
 import { buildPipingClassIndex } from '../../../converters/xml-cii2019-core/piping-class-resolver.js';
 import { resolveBranchProcessData } from '../../../converters/xml-cii2019-core/branch-process-resolver.js';
 import { buildStagedDtxrIndex, resolveXmlCiiNodeDtxr } from '../../../converters/xml-cii2019-core/dtxr-resolver.js';
@@ -419,6 +419,7 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
   const branchRows = [];
   const nodeRows = [];
   const pipingClassIndex = buildPipingClassIndex(config.pipingClass?.masterRows || []);
+  const weightBoreIndex = createXmlCiiWeightBoreIndex(config);
   const stagedIndex = buildStagedDtxrIndex(stagedJsonText || '', config);
   const materialMap = config.material?.mapRows || [];
 
@@ -553,12 +554,12 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
       materialCodeKey: resolved.materialCodeKey || _classKey({ pipingClass: resolved.pipingClass || derivedClassRaw })
     });
 
-    _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass: resolved.pipingClass, stagedIndex, config, nodeRows });
+    _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass: resolved.pipingClass, stagedIndex, config, nodeRows, weightBoreIndex });
   }
   return { branchRows, nodeRows };
 }
 
-function _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass, stagedIndex, config, nodeRows }) {
+function _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass, stagedIndex, config, nodeRows, weightBoreIndex }) {
   let previousPosition = null;
   const branchNodes = _xmlChildrenByName(branch, 'Node');
   branchNodes.forEach((node, nodeIdx) => {
@@ -570,7 +571,7 @@ function _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolv
     const componentType = _xmlText(node, 'ComponentType');
     const weightEligible = isXmlCiiWeightReviewNode(node);
     const dtxrRes = weightEligible ? resolveXmlCiiNodeDtxr(node, stagedIndex, config) : { value: '', source: 'not-weight-eligible', matchedKey: '' };
-    const ranking = (weightEligible && boreMm != null && branchRating && lengthMm != null) ? rankXmlCiiWeightCandidates({ boreMm, rating: branchRating, lengthMm, nodeName: _xmlText(node, 'NodeName'), componentType, componentRefNo: _xmlText(node, 'ComponentRefNo'), dtxr: dtxrRes.value || '' }, config, { includeRejected: true }) : { nodeHint: null, candidates: [], rejectedCandidates: [], best: null };
+    const ranking = (weightEligible && boreMm != null && branchRating && lengthMm != null) ? rankXmlCiiWeightCandidates({ boreMm, rating: branchRating, lengthMm, nodeName: _xmlText(node, 'NodeName'), componentType, componentRefNo: _xmlText(node, 'ComponentRefNo'), dtxr: dtxrRes.value || '' }, config, { includeRejected: true, candidateRows: weightBoreIndex.forBore(boreMm) }) : { nodeHint: null, candidates: [], rejectedCandidates: [], best: null };
     const candidates = ranking.candidates.slice(0, 5);
     const weightKey = xmlCiiWeightReviewNodeOverrideKey(branchName, node, nodeIdx);
     const overrideWeight = Number(config?.overrides?.rigidWeight?.[weightKey]);
