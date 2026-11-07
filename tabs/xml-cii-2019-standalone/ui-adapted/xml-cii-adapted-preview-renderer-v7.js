@@ -143,7 +143,7 @@ export function installDtxrRatingAction({ host, rootEl, xmlText, config, options
       // A failure is visible and never reported as a successful persistence.
       if (!host.__xmlCiiFetchSaveScheduled) {
         host.__xmlCiiFetchSaveScheduled = true;
-        setTimeout(async () => {
+        const saveAfterPaint = async () => {
           host.__xmlCiiFetchSaveScheduled = false;
           perf?.mark?.('xml-cii:popup:fetch-save:start');
           try {
@@ -156,7 +156,13 @@ export function installDtxrRatingAction({ host, rootEl, xmlText, config, options
             perf?.measure?.('xml-cii:popup:fetch-save',
               'xml-cii:popup:fetch-save:start', 'xml-cii:popup:fetch-save:end');
           }
-        }, 0);
+        };
+        // A zero-delay timer can run before the browser's next paint.
+        // Queue persistence after one animation frame so the success notice
+        // can actually become visible before serialization starts.
+        if (typeof requestAnimationFrame === 'function')
+          requestAnimationFrame(() => setTimeout(saveAfterPaint, 0));
+        else setTimeout(saveAfterPaint, 0);
       }
     } catch (error) {
       notice(`DTXR Rating fetch failed: ${text(error?.message || error)}`, true);
