@@ -16,8 +16,23 @@ export function _toText(val) { return val === null || val === undefined ? '' : S
 export function _toFiniteNumber(value, fallback) { const numeric = Number(value); return Number.isFinite(numeric) ? numeric : fallback; }
 export function _esc(value) { return _toText(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'); }
 export function _xmlLocalName(node) { return _toText(node?.localName || node?.nodeName).replace(/^.*:/, ''); }
-export function _xmlChildrenByName(parent, localName) { return [...(parent?.childNodes || [])].filter((child) => child.nodeType === 1 && _xmlLocalName(child) === localName); }
-export function _xmlFirstChild(parent, localName) { return _xmlChildrenByName(parent, localName)[0] || null; }
+export function _xmlChildrenByName(parent, localName) {
+  const nodes = parent?.childNodes || [];
+  const result = [];
+  for (let i = 0; i < nodes.length; i += 1) {
+    const child = nodes[i];
+    if (child.nodeType === 1 && _xmlLocalName(child) === localName) result.push(child);
+  }
+  return result;
+}
+export function _xmlFirstChild(parent, localName) {
+  const nodes = parent?.childNodes || [];
+  for (let i = 0; i < nodes.length; i += 1) {
+    const child = nodes[i];
+    if (child.nodeType === 1 && _xmlLocalName(child) === localName) return child;
+  }
+  return null;
+}
 export function _xmlText(parent, localName) { return _toText(_xmlFirstChild(parent, localName)?.textContent).trim(); }
 
 export function _normalizePoint(p) {
@@ -316,11 +331,19 @@ export function _ratingOverride(config, keys) { return _bucketText(config, 'rati
 export function _classKey(row) { const pc = _toText(row?.pipingClass || row?.pipingClassDerived).toUpperCase().replace(/\s+/g, ''); return pc ? `PC:${pc}` : ''; }
 export function _classSizeKey(row) { const cls = _classKey(row), bore = Number(row?.sizeMm ?? _toText(row?.size).replace(/[^0-9.+-]/g, '')); return cls && Number.isFinite(bore) && bore > 0 ? `${cls}|DN:${Math.round(bore)}` : cls; }
 
-export function _branchDtxrValues(branch, stagedIndex, config) {
+function cachedNodeDtxr(node, stagedIndex, config, cache) {
+  if (!cache) return resolveXmlCiiNodeDtxr(node, stagedIndex, config);
+  if (cache.has(node)) return cache.get(node);
+  const resolved = resolveXmlCiiNodeDtxr(node, stagedIndex, config);
+  cache.set(node, resolved);
+  return resolved;
+}
+
+export function _branchDtxrValues(branch, stagedIndex, config, dtxrCache) {
   const values = [];
   for (const node of _xmlChildrenByName(branch, 'Node')) {
     for (const key of ['DTXR', 'DTXR_POS', 'TEEDESC_POS', 'DTXR_PS']) { const v = _xmlText(node, key); if (v) values.push(v); }
-    const res = resolveXmlCiiNodeDtxr(node, stagedIndex, config); if (res?.value) values.push(res.value);
+    const res = cachedNodeDtxr(node, stagedIndex, config, dtxrCache); if (res?.value) values.push(res.value);
   }
   return _uniqueKeys(values);
 }
@@ -392,6 +415,19 @@ export function _processDataText(config, keys, fieldKey) {
 }
 
 export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
+  const perf = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance : null;
+  const start = perf?.now() ?? 0;
+  const elapsed = (since) => perf ? perf.now() - since : 0;
+  const totals = { parse: 0, cleanup: 0, index: 0, lineLookup: 0,
+    branchResolve: 0, dtxrWall: 0, nodeRows: 0, weightRanking: 0 };
+  const emit = () => {
+    if (!perf) return;
+    for (const [name, duration] of Object.entries(totals)) {
+      // The aggregate is a sum of per-branch spans, not a wall-clock ladder.
+      try { perf.measure('xml-cii:dryrun:' + name, { start: 0, duration }); } catch {}
+    }
+    try { perf.measure('xml-cii:dryrun:total', { start: 0, duration: elapsed(start) }); } catch {}
+  };
   if (typeof DOMParser === 'undefined') return { branchRows: [], nodeRows: [] };
   let document;
   try {
@@ -401,6 +437,8 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
     return { branchRows: [], nodeRows: [] };
   }
 
+  totals.parse = elapsed(start);
+  const cleanupStart = perf?.now() ?? 0;
   // Node Block Invariant Cleanup Sync (Parity with xml-cii-node-block-cleanup.js)
   const thresholdMm = Math.max(0, Number(config.shortElementLengthDropThresholdMm ?? 6));
   const dropGask = config.disableGasketNodes === true || config.disableGasketInOutput === true || (config.dropGasketNodes !== false && config.dropGasketsInEnrichment !== false);
@@ -416,14 +454,19 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
     }
   }
 
+  totals.cleanup = elapsed(cleanupStart);
+  const indexStart = perf?.now() ?? 0;
   const branchRows = [];
   const nodeRows = [];
+  const dtxrCache = new WeakMap();
   const pipingClassIndex = buildPipingClassIndex(config.pipingClass?.masterRows || []);
   const weightBoreIndex = createXmlCiiWeightBoreIndex(config);
   const stagedIndex = buildStagedDtxrIndex(stagedJsonText || '', config);
   const materialMap = config.material?.mapRows || [];
+  totals.index = elapsed(indexStart);
 
   for (const branch of [...document.getElementsByTagName('Branch')]) {
+    const lineLookupStart = perf?.now() ?? 0;
     const branchName = _xmlText(branch, 'Branchname');
     const lineKey = deriveLineKeyFromBranchName(branchName, config);
     let lineListRawMatch = lineKey ? _xmlCiiFindLineListRow(lineKey, config) : null;
@@ -439,6 +482,8 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
         lineKeyProposed = similar.proposedKey;
       }
     }
+    totals.lineLookup += elapsed(lineLookupStart);
+    const branchResolveStart = perf?.now() ?? 0;
     const lineListMatch = _normaliseLineListMatch(lineListRawMatch, config);
     const lineFromTo = _xmlCiiRowFromTo(lineListMatch, config);
     const lineListClass = _rowText(lineListMatch, ['pipingClass', 'Piping Class', 'PIPING_CLASS']);
@@ -453,6 +498,7 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
     const branchXmlFacts = _branchXmlFallbackFacts(branch);
     const resolved = resolveBranchProcessData({ branchName, lineKey, lineRow: resolverLineRow, boreMm, componentType: 'PIPE', rating: inputRating, materialMap, pipingClassIndex, overrides: config.overrides || {}, xmlNode: branchXmlFacts, xmlBranch: branchXmlFacts, config });
     const branchRating = manualRating || resolved.rating || _deriveRatingFromPipingClass(resolved.pipingClass, config) || rowRating;
+    totals.branchResolve += elapsed(branchResolveStart);
     const ratingSource = manualRating ? 'override' : _overrideSource(config.overrides, 'rating', lineKey);
     const pdOverride = (lineKey && config?.overrides?.processData?.[lineKey]) || {};
 
@@ -482,7 +528,9 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
     const density = densityInfo.value || _processDefaultValue(config, 'density');
     const densitySource = densityInfo.value ? densityInfo.source : (_processDefaultValue(config, 'density') ? 'default' : 'none');
 
-    const dtxrWall = resolveXmlCiiWallThicknessFromDtxr({ boreMm, dtxrValues: _branchDtxrValues(branch, stagedIndex, config), config });
+    const wallStart = perf?.now() ?? 0;
+    const dtxrWall = resolveXmlCiiWallThicknessFromDtxr({ boreMm, dtxrValues: _branchDtxrValues(branch, stagedIndex, config, dtxrCache), config });
+    totals.dtxrWall += elapsed(wallStart);
     const wallThickness = resolved.wallThicknessMm != null ? Number(resolved.wallThicknessMm.toPrecision(6)).toString() : '';
     const corrosion = resolved.corrosionAllowanceMm != null ? String(resolved.corrosionAllowanceMm) : '';
 
@@ -554,12 +602,15 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
       materialCodeKey: resolved.materialCodeKey || _classKey({ pipingClass: resolved.pipingClass || derivedClassRaw })
     });
 
-    _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass: resolved.pipingClass, stagedIndex, config, nodeRows, weightBoreIndex });
+    const nodeStart = perf?.now() ?? 0;
+    _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass: resolved.pipingClass, stagedIndex, config, nodeRows, weightBoreIndex, dtxrCache, perf, totals });
+    totals.nodeRows += elapsed(nodeStart);
   }
+  emit();
   return { branchRows, nodeRows };
 }
 
-function _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass, stagedIndex, config, nodeRows, weightBoreIndex }) {
+function _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolvedPipingClass, stagedIndex, config, nodeRows, weightBoreIndex, dtxrCache, perf, totals }) {
   let previousPosition = null;
   const branchNodes = _xmlChildrenByName(branch, 'Node');
   branchNodes.forEach((node, nodeIdx) => {
@@ -570,8 +621,10 @@ function _xmlCiiDryRunNodeRow({ branch, branchName, boreMm, branchRating, resolv
     const nodeNumber = _xmlText(node, 'NodeNumber');
     const componentType = _xmlText(node, 'ComponentType');
     const weightEligible = isXmlCiiWeightReviewNode(node);
-    const dtxrRes = weightEligible ? resolveXmlCiiNodeDtxr(node, stagedIndex, config) : { value: '', source: 'not-weight-eligible', matchedKey: '' };
+    const dtxrRes = weightEligible ? cachedNodeDtxr(node, stagedIndex, config, dtxrCache) : { value: '', source: 'not-weight-eligible', matchedKey: '' };
+    const rankStart = perf?.now() ?? 0;
     const ranking = (weightEligible && boreMm != null && branchRating && lengthMm != null) ? rankXmlCiiWeightCandidates({ boreMm, rating: branchRating, lengthMm, nodeName: _xmlText(node, 'NodeName'), componentType, componentRefNo: _xmlText(node, 'ComponentRefNo'), dtxr: dtxrRes.value || '' }, config, { includeRejected: true, candidateRows: weightBoreIndex.forBore(boreMm) }) : { nodeHint: null, candidates: [], rejectedCandidates: [], best: null };
+    if (perf) totals.weightRanking += perf.now() - rankStart;
     const candidates = ranking.candidates.slice(0, 5);
     const weightKey = xmlCiiWeightReviewNodeOverrideKey(branchName, node, nodeIdx);
     const overrideWeight = Number(config?.overrides?.rigidWeight?.[weightKey]);
