@@ -279,6 +279,36 @@ test('F — Fetch Rating updates live branch rows and notice without a duplicate
   // on Fetch breaks the synchronous publication/one-commit assertions.
 });
 
+test('H3/G1e: two Fetch clicks before Chrome rAF cause exactly one deferred save', async () => {
+  resetSnapshot();
+  const oldRaf = globalThis.requestAnimationFrame;
+  const callbacks = [];
+  globalThis.requestAnimationFrame = cb => { callbacks.push(cb); return callbacks.length; };
+  const { root, host } = makeRoot();
+  let saves = 0;
+  const config = makeConfig();
+  try {
+    await buildV7Preview(root, XML, config, options({
+      onSaveConfig: async () => { saves++; },
+    }));
+    const button = host.querySelector('[data-mc-dtxr-rating-fetch]');
+    assert.ok(button);
+    button.click();
+    button.click();
+    assert.equal(callbacks.length, 1, 'rAF path may queue only one save');
+    assert.equal(saves, 0, 'save is not in the Fetch click task');
+    callbacks[0]();
+    await waitFor(() => saves === 1);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(saves, 1, 'no second deferred config save after rAF');
+    assert.equal(host.dataset.mcPreviewBuildCompleted, 'true');
+  } finally {
+    if (oldRaf === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = oldRaf;
+  }
+  // Behavior mutant: schedule a new rAF on every Fetch click -> two saves.
+});
+
 test('manual Build retains the original direct completion callback', async () => {
   resetSnapshot();
   const { root, host } = makeRoot();
