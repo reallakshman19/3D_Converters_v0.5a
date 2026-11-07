@@ -63,3 +63,41 @@ test('H1: an obsolete/disconnected first-visit host cannot build after navigatio
   await ready;
   assert.equal(builds, 0, 'old click must not affect a different popup visit');
 });
+
+test('H1: an early click survives replacing the host during a same-phase rerender', async () => {
+  let firstHandler, nextHandler;
+  let builds = 0;
+  const early = { disabled: false, dataset: {},
+    addEventListener(_type, handler) { firstHandler = handler; },
+    click() { if (!this.disabled) firstHandler?.(); } };
+  const next = { disabled: false, dataset: {},
+    addEventListener(_type, handler) { nextHandler = handler; },
+    click() { if (!this.disabled) nextHandler?.(); } };
+  const bound = { disabled: false, click: () => { builds++; } };
+  const oldHost = { isConnected: true, querySelector: () => early };
+  const newHost = { isConnected: true, button: next,
+    querySelector() { return this.button; } };
+  let activeHost = oldHost;
+  const root = { isConnected: true, querySelector: () => activeHost };
+  let releaseOld, releaseNew;
+  const oldGate = new Promise(resolve => { releaseOld = resolve; });
+  const newGate = new Promise(resolve => { releaseNew = resolve; });
+  const oldReady = armFirstXmlCiiPreviewBuild(root, async () => {
+    await oldGate;
+  });
+  early.click();
+  activeHost = newHost;
+  oldHost.isConnected = false;
+  const newReady = armFirstXmlCiiPreviewBuild(root, async () => {
+    await newGate;
+    newHost.button = bound;
+  });
+  releaseOld();
+  await oldReady;
+  assert.equal(builds, 0, 'obsolete host cannot consume queued click');
+  releaseNew();
+  await newReady;
+  assert.equal(builds, 1, 'replacement host consumes the queued click once');
+  // Mutation: storing the queue on host instead of root loses the click.
+});
+
