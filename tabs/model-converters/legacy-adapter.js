@@ -65,7 +65,7 @@ import { DEFAULT_ENRICHMENT_CONFIG as _XML_COMPARE_ENRICHMENT_DEFAULTS } from '.
 import { parseInputXmlForBranchPreview, applyElementFieldEdits, FIELD_SPECS } from './converters/inputxml2019_helper/inputxml-branch-preview.js?v=20260712-inputxml2019-branch-editable-1';
 import { CONVERTERS, getConverterById } from './converter-registry.js?v=20260617-basic-glb-3';
 import { XML_CII_WORKFLOW_PHASES } from './WorkflowShell.js';
-import { loadStoredState, saveStoredState } from './core/config-store.js';
+import { loadStoredState, saveStoredState, writePreparedStoredState, stageXmlCiiFetchedRatings, clearXmlCiiFetchedRatingsJournal, applyStagedXmlCiiFetchedRatings } from './core/config-store.js';
 import { downloadOutput, arrayBufferToBase64, baseNameWithoutExtension, isRvmFileName, isAttOrTxtFileName, encodeTextUtf8, decodeTextUtf8, toFiniteNumber } from './core/output-utils.js';
 import { MASTER_INPUTXML_TEMPLATE, MASTER_INPUTXML_FILE_NAME } from './master-inputxml-sample.js';
 import { WorkflowModal } from './shared/WorkflowModal.js';
@@ -6764,7 +6764,58 @@ export function renderModelConvertersTab(container) {
     } catch {}
   }
 
-  function xmlCiiSaveConfig(config, { compact = false } = {}) {
+  let xmlCiiConfigSaveGeneration = 0;
+  function xmlCiiSaveConfig(config, { compact = false, background = false } = {}) {
+    const generation = ++xmlCiiConfigSaveGeneration;
+    if (background && typeof Worker === 'function') {
+      // Fetch alone uses this branch. The small rating journal is already
+      // durable before painting the success notice.
+      let worker;
+      try {
+        worker = new Worker(new URL('./core/config-save-worker.js', import.meta.url), { type: 'module' });
+      } catch (error) {
+        console.warn('[XML->CII] background config worker unavailable', error);
+        return xmlCiiSaveConfig(config, { compact });
+      }
+      const previous = defaultsByConverter[selectedConverter] || {};
+      const snapshot = {
+        ...defaultsByConverter,
+        [selectedConverter]: { ...previous, supportConfigJson: '' },
+      };
+      return new Promise((resolve, reject) => {
+        const terminate = () => { try { worker.terminate(); } catch {} };
+        worker.onmessage = ({ data }) => {
+          if (data?.generation !== generation) return;
+          terminate();
+          if (generation !== xmlCiiConfigSaveGeneration) { resolve('superseded'); return; }
+          if (data.error) { reject(new Error(data.error)); return; }
+          try {
+            writePreparedStoredState(data.payload);
+            activeValues().supportConfigJson = data.fullJson;
+            clearXmlCiiFetchedRatingsJournal();
+            // Do not concatenate serialization, storage and textarea DOM work
+            // into one long main-thread Fetch task.
+            const updateUi = () => {
+              if (generation !== xmlCiiConfigSaveGeneration) return;
+              xmlCiiRenderAdvancedWhenConfigFits();
+              _xmlCiiSyncConfigTextarea();
+            };
+            if (typeof requestAnimationFrame === 'function')
+              requestAnimationFrame(() => setTimeout(updateUi, 0));
+            else setTimeout(updateUi, 0);
+            resolve(data.status);
+          } catch (error) { reject(error); }
+        };
+        worker.onerror = (event) => {
+          terminate();
+          reject(new Error(String(event?.message || 'config save worker failed')));
+        };
+        try {
+          worker.postMessage({ generation, config, compact, selectedConverter,
+            defaultsByConverter: snapshot });
+        } catch (error) { terminate(); reject(error); }
+      });
+    }
     const perf = typeof performance !== 'undefined' ? performance : null;
     perf?.mark?.('xml-cii:popup:config-save:start');
     try {
@@ -6773,6 +6824,7 @@ export function renderModelConvertersTab(container) {
       // Other config edits retain their existing pretty-printed form.
       activeValues().supportConfigJson = JSON.stringify(config, null, compact ? 0 : 2);
       xmlCiiPersistLargeConfigChange('XML->CII config');
+      clearXmlCiiFetchedRatingsJournal();
       xmlCiiRenderAdvancedWhenConfigFits();
       _xmlCiiSyncConfigTextarea();
     } finally {
@@ -7158,7 +7210,7 @@ export function renderModelConvertersTab(container) {
     const perf = typeof performance !== 'undefined' ? performance : null;
     perf?.mark?.('xml-cii:popup:master-hydrate:start');
     const values = activeValues();
-    const config = _parseXmlCiiEnrichmentConfig(values.supportConfigJson);
+    const config = applyStagedXmlCiiFetchedRatings(_parseXmlCiiEnrichmentConfig(values.supportConfigJson));
     let hydrated = false;
 
     for (const masterKey of XML_CII_MASTER_ORDER) {
@@ -7869,7 +7921,10 @@ export function renderModelConvertersTab(container) {
       if (!target.isConnected || target.querySelector('#mc-preview-table-host') !== host) return;
       const config = xmlCiiConfigWithLoadedMasterRows('XML->CII popup v7 preview');
       await xmlCiiBuildAndRenderPreviewV7(target, xmlText, config, {
-        onSaveConfig: (newConfig) => xmlCiiSaveConfig(newConfig, { compact: true }),
+        onSaveConfig: (newConfig, source = {}) => xmlCiiSaveConfig(newConfig, {
+          compact: true, background: source.fetchRating === true,
+        }),
+        onStageRatingOverrides: (newConfig) => stageXmlCiiFetchedRatings(newConfig.overrides),
         openOverridePopup: _xmlCiiOpenPreviewOverridePopup,
         ensureOverrides: xmlCiiEnsureOverrides,
         resolveStagedJsonText: (nextConfig) => xmlCiiCurrentStagedJsonSource(nextConfig),
