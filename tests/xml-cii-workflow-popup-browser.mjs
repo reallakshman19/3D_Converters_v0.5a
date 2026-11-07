@@ -16,6 +16,7 @@ import { createServer as createSocketServer } from 'node:net';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const options = new Map();
 for (let i = 2; i < process.argv.length; i += 2) options.set(process.argv[i], process.argv[i + 1]);
@@ -393,7 +394,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
     console.error('R13 popup browser probe FAILED:', error?.stack || error);
     process.exitCode = 1;
