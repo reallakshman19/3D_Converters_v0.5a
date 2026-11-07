@@ -292,9 +292,9 @@ const BM2_CHECK = String.raw`(async () => {
         await wait(() => !!document.querySelector('#model-converters-output [data-output-index]'),
           'BM2 Run output', __MAX_RUN_MS__);
         const downloads = [...document.querySelectorAll('#model-converters-output [data-output-index]')];
-        const enriched = downloads.find(button => /enrich.*\\.xml$/i.test(
+        const enriched = downloads.find(button => /enrich.*\.xml$/i.test(
           button.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || ''
-        )) || downloads.find(button => /\\.xml$/i.test(
+        )) || downloads.find(button => /\.xml$/i.test(
           button.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || ''
         ));
         if (!enriched) throw Error('No XML output to hash; output list: ' +
