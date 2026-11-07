@@ -131,13 +131,15 @@ export async function waitForAppOrigin(readDocument, expectedOrigin, {
   throw Error('Chrome app origin never became ready: ' + expectedOrigin + ' (last: ' + last + ')');
 }
 
-async function evaluate(wsUrl, expression, expectedOrigin) {
+export async function evaluate(wsUrl, expression, expectedOrigin, {
+  readOnce = evalOnce, awaitOrigin = waitForAppOrigin, pause = sleep,
+} = {}) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    await waitForAppOrigin(async () => JSON.parse(await evalOnce(wsUrl,
+    await awaitOrigin(async () => JSON.parse(await readOnce(wsUrl,
       'JSON.stringify({origin:location.origin,href:location.href,ready:document.readyState,hasBody:Boolean(document.body)})')),
-      expectedOrigin);
+      expectedOrigin, { pause });
     try {
-      return await evalOnce(wsUrl, expression);
+      return await readOnce(wsUrl, expression);
     } catch (error) {
       if (!/Execution context was destroyed|Cannot find context|Context with specified id not found/i.test(String(error?.message || error)))
         throw error;
