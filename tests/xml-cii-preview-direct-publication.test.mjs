@@ -247,23 +247,36 @@ test('E — delayed source for A cannot overwrite the newer B result', async () 
   assert.equal(bResults[0].stagedJsonText, '{"source":"B"}');
 });
 
-test('F — Fetch Rating as per DTXR uses the latest branch rows and rebuilds', async () => {
+test('F — Fetch Rating updates live branch rows and notice without a duplicate Build', async () => {
   resetSnapshot();
   const { root, host } = makeRoot();
   const config = makeConfig();
   const commits = [];
-  await buildV7Preview(root, XML, config, options({ onPreviewCommitted: (r) => commits.push(r) }));
+  let releaseSave;
+  const pendingSave = new Promise(resolve => { releaseSave = resolve; });
+  await buildV7Preview(root, XML, config, options({
+    onPreviewCommitted: (result) => commits.push(result),
+    onSaveConfig: () => pendingSave,
+  }));
   const first = commits.at(-1);
   assert.equal(first.branchRows[0].branchName, '/REG/B1');
   assert.equal(first.branchRows[0].ratingDtxr, '900', 'real DTXR evidence must resolve');
   const button = host.querySelector('[data-mc-dtxr-rating-fetch]');
   assert.ok(button);
-  button.click();
-  await waitFor(() => commits.length >= 2 && host.dataset.mcPreviewBuildCompleted === 'true');
-  assert.equal(config.overrides.rating['/REG/B1'], '900');
-  assert.equal(commits.at(-1).branchRows[0].rating, '900');
-  assert.equal(readXmlCiiPreviewRatingSnapshot().records[0].rating, '900');
-  assert.ok(host.querySelector('[data-mc-dtxr-rating-fetch]'));
+  try {
+    button.click();
+    assert.equal(commits.length, 1, 'Fetch must not calculate a second Preview');
+    assert.equal(host.dataset.mcPreviewBuildCompleted, 'true');
+    assert.equal(config.overrides.rating['/REG/B1'], '900');
+    assert.equal(first.branchRows[0].rating, '900');
+    assert.equal(readXmlCiiPreviewRatingSnapshot().records[0].rating, '900');
+    assert.match(host.textContent, /Fetched DTXR Rating for/);
+    assert.ok(host.querySelector('[data-mc-dtxr-rating-fetch]'));
+  } finally {
+    releaseSave();
+  }
+  // Behavior mutants: awaiting a delayed save before the notice or rebuilding
+  // on Fetch breaks the synchronous publication/one-commit assertions.
 });
 
 test('manual Build retains the original direct completion callback', async () => {
