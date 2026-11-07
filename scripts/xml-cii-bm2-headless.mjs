@@ -70,9 +70,16 @@ const fiveTimings = {
 };
 const expected = '5cf2bfbe4cbe88361afcb3374c5230ee4badf42d9f503ec2cb5b2f0b7414e00c';
 const verified = values.outputBytes === 687252 && values.outputSha256 === expected;
-const buildMeasures = (report.bm2Budget?.popupPerformanceMeasures || [])
-  .filter(entry => entry.name.startsWith('xml-cii:popup:build:'))
+const measures = report.bm2Budget?.popupPerformanceMeasures || [];
+const blockingBuildPhases = new Set([
+  'xml-cii:popup:build:dryrun',
+  'xml-cii:popup:build:table',
+  'xml-cii:popup:build:staged',
+]);
+const buildMeasures = measures.filter(entry => blockingBuildPhases.has(entry.name))
   .sort((a, b) => b.durationMs - a.durationMs);
+const backgroundAuthority = measures.filter(entry =>
+  entry.name === 'xml-cii:popup:build:authority');
 const output = {
   run: 'PERF-1.R13 BM2 real-Chrome',
   ...fiveTimings,
@@ -82,6 +89,7 @@ const output = {
   outputMatchesExpected: verified,
   maxStorageWriteBytes: report.bm2Budget?.maxWriteBytes ?? null,
   buildCostTop3: buildMeasures.slice(0, 3),
+  backgroundAuthorityMs: backgroundAuthority.at(-1)?.durationMs ?? null,
 };
 console.log(JSON.stringify(output, null, 2));
 if (Object.values(fiveTimings).some(value => !Number.isFinite(value))
