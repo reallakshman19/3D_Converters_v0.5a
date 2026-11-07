@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
- * PERF-1.R13 G4: standalone, zero-dependency BM2 real-Chrome evidence runner.
+ * PERF-1.R14 H4: standalone, zero-dependency BM2 real-Chrome evidence runner.
  *
  * node scripts/xml-cii-bm2-headless.mjs --xml /path/BM2.xml \
- *   --staged /path/STF.json --config /path/bm2-workbench-config.json
+ *   --staged /path/STF.json --config /path/GLRD-INPUTS\\derived\\bm2-workbench-config.json
  *
- * Optional: --chromium /path/chrome
+ * Optional: --chromium /path/chrome. --config accepts the Oracle path
+ * GLRD-INPUTS\\derived\\bm2-workbench-config.json or any explicit file path.
  * Prints five independently measured action spans and SHA-256 of the
  * production downloaded enriched XML (not a synthetic Preview payload).
  * A missing file, failed action, or mismatched SHA exits non-zero.
@@ -81,11 +82,13 @@ const buildMeasures = measures.filter(entry => blockingBuildPhases.has(entry.nam
 const backgroundAuthority = measures.filter(entry =>
   entry.name === 'xml-cii:popup:build:authority');
 const output = {
-  run: 'PERF-1.R13 BM2 real-Chrome',
+  run: 'PERF-1.R14 BM2 real-Chrome',
   ...fiveTimings,
   outputBytes: values.outputBytes ?? null,
   outputSha256: values.outputSha256 ?? null,
   outputFile: values.outputFile ?? null,
+  outputSource: values.outputSource ?? null,
+  rigidReviewSkipped: values.rigidReviewSkipped ?? false,
   outputMatchesExpected: verified,
   maxStorageWriteBytes: report.bm2Budget?.maxWriteBytes ?? null,
   buildCostTop3: buildMeasures.slice(0, 3),
