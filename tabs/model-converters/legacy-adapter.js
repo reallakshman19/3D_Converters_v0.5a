@@ -74,6 +74,7 @@ import { FieldMappingTable } from './shared/FieldMappingTable.js';
 import { EditablePreviewTable } from './shared/EditablePreviewTable.js';
 import { xmlCiiRenderPreviewPhase as xmlCiiRenderPreviewPhaseImported, xmlCiiBuildAndRenderPreview as xmlCiiBuildAndRenderPreviewImported, xmlCiiDryRunPreview } from './converters/xmltocii2019_helper/preview-renderer.js';
 import { xmlCiiRenderPreviewPhase as xmlCiiRenderPreviewPhaseV7, xmlCiiBuildAndRenderPreview as xmlCiiBuildAndRenderPreviewV7 } from '../xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer-v7.js';
+import { armFirstXmlCiiPreviewBuild } from './workflow/preview-first-click.js';
 import { xmlCiiRenderWeightMatchPhase as xmlCiiRenderWeightMatchPhaseImported, bindXmlCiiWeightMatchPhase as bindXmlCiiWeightMatchPhaseImported } from './converters/xmltocii2019_helper/weight-match-renderer.js';
 import { xmlCiiRenderSupportMapperPhase as xmlCiiRenderSupportMapperPhaseImported, bindXmlCiiSupportMapperPhase as bindXmlCiiSupportMapperPhaseImported } from './converters/xmltocii2019_helper/support-types-panel.js';
 import { extractXmlCiiBranchSample as _extractXmlCiiBranchSample } from './xml-cii-branch-sample-sync.js';
@@ -9810,7 +9811,9 @@ export function renderModelConvertersTab(container) {
       else if (phaseId === 'support-mapper') html = xmlCiiRenderSupportMapperPhase();
       else if (phaseId === 'config') html = xmlCiiRenderConfigPhase();
       target.innerHTML = html;
-      if (phaseId === 'preview') void xmlCiiInitializePopupPreviewV7(target);
+      if (phaseId === 'preview') void armFirstXmlCiiPreviewBuild(target,
+        () => xmlCiiInitializePopupPreviewV7(target)).catch((error) =>
+          console.warn('[XML->CII Preview] First-click initialization failed:', error));
 
       // Event binding is best-effort: the content is already visible, so a bind
       // failure must never bubble up and freeze the modal. Log and continue.
