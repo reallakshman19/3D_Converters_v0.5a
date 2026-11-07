@@ -1,6 +1,32 @@
 import { CONVERTERS } from '../converter-registry.js';
 
 const STORAGE_KEY = 'model-converters.defaults.v1';
+const FETCH_RATING_JOURNAL = 'model-converters.xml-cii.fetch-rating-journal.v1';
+
+// The small, synchronous Fetch journal is replayed when the page reloads
+// before the background full-config serializer can finish. It is never a
+// Preview row cache or a replacement for the Owner's imported masters.
+export function stageXmlCiiFetchedRatings(overrides) {
+  const payload = JSON.stringify({ overrides });
+  if (new TextEncoder().encode(payload).byteLength > 1_000_000)
+    throw new Error('Fetch rating journal exceeds browser storage budget');
+  window.localStorage.setItem(FETCH_RATING_JOURNAL, payload);
+}
+export function clearXmlCiiFetchedRatingsJournal() {
+  try { window.localStorage.removeItem(FETCH_RATING_JOURNAL); } catch {}
+}
+export function applyStagedXmlCiiFetchedRatings(config) {
+  try {
+    const raw = window.localStorage.getItem(FETCH_RATING_JOURNAL);
+    if (!raw) return config;
+    const patch = JSON.parse(raw);
+    if (patch?.overrides && typeof patch.overrides === 'object' && !Array.isArray(patch.overrides)) {
+      config.overrides = patch.overrides;
+    }
+  } catch {}
+  return config;
+}
+
 
 function _clone(obj) {
   if (obj === undefined) return undefined;
@@ -131,6 +157,18 @@ export function loadStoredState() {
     // Keep defaults
   }
 
+  // A page reload may preempt the deferred worker save. Replay the very
+  // small rating-only journal over the stored config without dropping masters.
+  const storedXmlCii = defaultsByConverter.xml_to_cii;
+  if (storedXmlCii && typeof storedXmlCii.supportConfigJson === 'string') {
+    try {
+      const config = JSON.parse(storedXmlCii.supportConfigJson);
+      const patched = applyStagedXmlCiiFetchedRatings(config);
+      if (patched.overrides && window.localStorage.getItem(FETCH_RATING_JOURNAL)) {
+        storedXmlCii.supportConfigJson = JSON.stringify(patched);
+      }
+    } catch {}
+  }
   return { selectedConverter, defaultsByConverter };
 }
 
