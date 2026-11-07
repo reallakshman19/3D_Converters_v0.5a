@@ -84,53 +84,84 @@ function installDtxrRatingAction({ host, rootEl, xmlText, config, options, branc
   button.title = 'Explicitly fetch unambiguous DTXR ratings as branch-scoped overrides. Normal execution uses Piping Class master Rating, then Regex Rating extraction.';
   button.style.cssText = 'padding:8px 14px;min-width:210px;';
   actionBar.appendChild(button);
-  button.addEventListener('click', async () => {
+  button.addEventListener('click', () => {
     const perf = typeof performance !== 'undefined' ? performance : null;
     perf?.mark?.('xml-cii:popup:fetch-rating:start');
-    try {
+    // This mark is the browser-visible contract: click to a DOM notice, not
+    // click to the end of an asynchronous save/rebuild promise chain.
+    const notice = (message, bad = false) => {
+      addNotice(host, message, bad);
+      perf?.mark?.('xml-cii:popup:fetch-rating:notice');
+      perf?.measure?.('xml-cii:popup:fetch-click-to-notice',
+        'xml-cii:popup:fetch-rating:start', 'xml-cii:popup:fetch-rating:notice');
+    };
     button.disabled = true;
-    perf?.mark?.('xml-cii:popup:fetch-apply:start');
-    const result = applyPreviewDtxrRatingOverrides(config, branchRows);
-    perf?.mark?.('xml-cii:popup:fetch-apply:end');
-    perf?.measure?.('xml-cii:popup:fetch-apply',
-      'xml-cii:popup:fetch-apply:start', 'xml-cii:popup:fetch-apply:end');
-    const changed = result.applied > 0 || result.cleared > 0;
-    if (!changed) {
-      addNotice(host, ratingFetchMessage(result), true);
-      button.disabled = false;
-      return;
-    }
-    // Reserve the requested rebuild before asynchronous config persistence.
-    const generation = (host.__xmlCiiPreviewGeneration || 0) + 1;
-    host.__xmlCiiPreviewGeneration = generation;
-    host.dataset.mcPreviewBuildCompleted = 'false';
-    discardPreviewCacheV7();
     try {
-      perf?.mark?.('xml-cii:popup:fetch-save:start');
-      try { await options?.onSaveConfig?.(config); }
-      finally {
-        perf?.mark?.('xml-cii:popup:fetch-save:end');
-        perf?.measure?.('xml-cii:popup:fetch-save',
-          'xml-cii:popup:fetch-save:start', 'xml-cii:popup:fetch-save:end');
+      perf?.mark?.('xml-cii:popup:fetch-apply:start');
+      const previouslyFetched = new Set(Object.keys(config?.overrides?.__dtxrRatingKeys || {}));
+      const result = applyPreviewDtxrRatingOverrides(config, branchRows);
+      perf?.mark?.('xml-cii:popup:fetch-apply:end');
+      perf?.measure?.('xml-cii:popup:fetch-apply',
+        'xml-cii:popup:fetch-apply:start', 'xml-cii:popup:fetch-apply:end');
+
+      if (!result.applied && !result.cleared) {
+        notice(ratingFetchMessage(result), true);
+        return;
       }
-      if (!isCurrentPreviewBuild(rootEl, host, generation)) return;
-      perf?.mark?.('xml-cii:popup:fetch-rebuild:start');
-      try {
-        await xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, { ...options, forceBuild: true, __previewGeneration: generation });
-      } finally {
-        perf?.mark?.('xml-cii:popup:fetch-rebuild:end');
-        perf?.measure?.('xml-cii:popup:fetch-rebuild',
-          'xml-cii:popup:fetch-rebuild:start', 'xml-cii:popup:fetch-rebuild:end');
+
+      // Fetch changes only Rating overrides. Update the live Preview rows and
+      // their corresponding visible cells instead of parsing XML, resolving
+      // every master and rebuilding the whole editable table a second time.
+      const fetched = new Map(result.targets.map(({ key, rating }) => [key, rating]));
+      for (let i = 0; i < branchRows.length; i += 1) {
+        const row = branchRows[i];
+        const key = text(row?.branchName).trim() || text(row?.lineKey).trim();
+        if (!fetched.has(key) && !previouslyFetched.has(key)) continue;
+        if (!fetched.has(key) && config?.overrides?.__previewFillDown?.rating?.[key]?.fillState === 'manual') continue;
+        const rating = fetched.get(key) ?? text(row?.ratingDerived);
+        row.rating = rating;
+        row.ratingSource = fetched.has(key) ? 'dtxr-rating-fetched' : 'derived';
+        const cell = host.querySelector?.(`[data-mc-edit-type="rating"][data-mc-edit-row="${i}"]`);
+        const displayed = cell?.querySelector?.('.mc-preview-editable-val');
+        if (displayed) displayed.textContent = rating || '—';
+        if (cell) cell.dataset.mcCurrentVal = rating;
       }
-      if (!isCurrentPreviewBuild(rootEl, host, generation)) return;
-      addNotice(host, ratingFetchMessage(result), result.applied === 0);
+
+      // Retire an unfinished asynchronous digest for the preceding build,
+      // but keep the now-consistent displayed Preview in the completed state.
+      host.__xmlCiiPreviewGeneration = (host.__xmlCiiPreviewGeneration || 0) + 1;
+      discardPreviewCacheV7();
+      publishXmlCiiPreviewRatingSnapshot(branchRows, {
+        authorityDigest: 'explicit-fetch-rating-live',
+      });
+      host.dataset.mcPreviewBuildCompleted = 'true';
+      addCacheEvidence(host, { status: 'UNCACHED', reason: 'Rating overrides changed; Rebuild recomputes other suggestions' });
+      notice(ratingFetchMessage(result), result.applied === 0);
+
+      // Persistence is deliberately OUTSIDE the user-visible click handler.
+      // A single scheduled save retains the R12 compact-config/storage policy.
+      // A failure is visible and never reported as a successful persistence.
+      if (!host.__xmlCiiFetchSaveScheduled) {
+        host.__xmlCiiFetchSaveScheduled = true;
+        setTimeout(async () => {
+          host.__xmlCiiFetchSaveScheduled = false;
+          perf?.mark?.('xml-cii:popup:fetch-save:start');
+          try {
+            await options?.onSaveConfig?.(config);
+          } catch (error) {
+            if (rootEl?.querySelector?.('#mc-preview-table-host') === host && host.isConnected !== false)
+              addNotice(host, `DTXR ratings applied but could not be saved: ${text(error?.message || error)}`, true);
+          } finally {
+            perf?.mark?.('xml-cii:popup:fetch-save:end');
+            perf?.measure?.('xml-cii:popup:fetch-save',
+              'xml-cii:popup:fetch-save:start', 'xml-cii:popup:fetch-save:end');
+          }
+        }, 0);
+      }
     } catch (error) {
-      if (isCurrentPreviewBuild(rootEl, host, generation)) {
-        addNotice(host, `DTXR Rating fetch failed: ${text(error?.message || error)}`, true);
-        button.disabled = false;
-      }
-    }
+      notice(`DTXR Rating fetch failed: ${text(error?.message || error)}`, true);
     } finally {
+      button.disabled = false;
       perf?.mark?.('xml-cii:popup:fetch-rating:end');
       perf?.measure?.('xml-cii:popup:fetch-rating',
         'xml-cii:popup:fetch-rating:start', 'xml-cii:popup:fetch-rating:end');
@@ -196,53 +227,48 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
       const isBuildCurrent = () => isCurrentPreviewBuild(rootEl, host, buildGeneration);
       if (!isBuildCurrent() || !Array.isArray(result?.branchRows)) return;
 
-      let authority = null;
-      let captured = null;
-      let reason = '';
-      try {
-        authority = await createPreviewCacheAuthority({
-          xmlText,
-          // Exact staged text used by the calculation, not a later re-read.
-          stagedJsonText: result.stagedJsonText,
-          config,
-        });
-      } catch (error) {
-        reason = text(error?.message || error);
-      }
-      if (!isBuildCurrent()) return;
-      // An external completion callback must succeed before publication.
+      // The engineering rows are already rendered and are the live authority.
+      // The digest is evidence, not permission to show the completed Build.
+      // Awaiting SubtleCrypto here used to extend Build/Fetch's completion
+      // promise under resource-starved Chrome despite an idle JS main thread.
       await options.onPreviewCommitted?.(result);
       if (!isBuildCurrent()) return;
-      if (authority) {
+      publishXmlCiiPreviewRatingSnapshot(result.branchRows, {
+        authorityDigest: 'explicit-preview-build',
+      });
+      installDtxrRatingAction({
+        host, rootEl, xmlText, config, options, branchRows: result.branchRows,
+      });
+      addCacheEvidence(host, { status: 'UNCACHED', reason: 'SHA-256 evidence pending (Preview rows are not persisted)' });
+      host.dataset.mcPreviewBuildCompleted = 'true';
+      committed = true;
+
+      // Fire-and-observe the diagnostic hash after Build completion. It never
+      // creates a persisted Preview and an obsolete generation cannot publish.
+      setTimeout(async () => {
+        if (!isBuildCurrent()) return;
+        const perf = typeof performance !== 'undefined' ? performance : null;
+        perf?.mark?.('xml-cii:popup:build:authority:start');
+        let authority = null;
+        let reason = '';
         try {
-          captured = capturePreviewCacheV7(authority, undefined, undefined, result);
+          authority = await createPreviewCacheAuthority({
+            xmlText, stagedJsonText: result.stagedJsonText, config,
+          });
+          if (!isBuildCurrent()) return;
+          const captured = capturePreviewCacheV7(authority, undefined, undefined, result);
           if (!captured.stored) reason = captured.reason;
         } catch (error) {
           reason = text(error?.message || error);
+        } finally {
+          perf?.mark?.('xml-cii:popup:build:authority:end');
+          perf?.measure?.('xml-cii:popup:build:authority',
+            'xml-cii:popup:build:authority:start', 'xml-cii:popup:build:authority:end');
         }
-      }
-      if (!isBuildCurrent()) return;
-      if (!captured) {
-        // A missing SHA-256 implementation must not suppress live Weight Match data.
-        publishXmlCiiPreviewRatingSnapshot(result.branchRows, {
-          authorityDigest: authority?.digest || 'explicit-preview-build',
+        if (isBuildCurrent()) addCacheEvidence(host, {
+          status: authority ? 'UNCACHED' : 'MISS', authority, reason,
         });
-      }
-      installDtxrRatingAction({
-        host,
-        rootEl,
-        xmlText,
-        config,
-        options,
-        branchRows: result.branchRows,
-      });
-      addCacheEvidence(host, {
-        status: captured?.stored ? 'REBUILT' : 'UNCACHED',
-        authority,
-        reason,
-      });
-      host.dataset.mcPreviewBuildCompleted = 'true';
-      committed = true;
+      }, 0);
     },
   };
 
