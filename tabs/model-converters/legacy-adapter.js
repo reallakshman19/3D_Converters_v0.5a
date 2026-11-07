@@ -6796,6 +6796,11 @@ export function renderModelConvertersTab(container) {
             writePreparedStoredState(data.payload);
             activeValues().supportConfigJson = data.fullJson;
             clearXmlCiiFetchedRatingsJournal();
+            if (data.status === 'trimmed' && !xmlCiiMasterStorageWarningShown) {
+              xmlCiiMasterStorageWarningShown = true;
+              notify({ level: 'info', title: 'XML->CII Masters',
+                message: 'Config exceeds browser storage: imported master tables remain available this session but must be re-imported after reload.' });
+            }
             perf?.mark?.('xml-cii:popup:fetch-worker-commit:end');
             perf?.measure?.('xml-cii:popup:fetch-worker-commit',
               'xml-cii:popup:fetch-worker-commit:start', 'xml-cii:popup:fetch-worker-commit:end');
