@@ -160,7 +160,9 @@ export function loadStoredState() {
   // A page reload may preempt the deferred worker save. Replay the very
   // small rating-only journal over the stored config without dropping masters.
   const storedXmlCii = defaultsByConverter.xml_to_cii;
-  if (storedXmlCii && typeof storedXmlCii.supportConfigJson === 'string') {
+  let hasJournal = false;
+  try { hasJournal = !!window.localStorage.getItem(FETCH_RATING_JOURNAL); } catch {}
+  if (hasJournal && storedXmlCii && typeof storedXmlCii.supportConfigJson === 'string') {
     try {
       const config = JSON.parse(storedXmlCii.supportConfigJson);
       const patched = applyStagedXmlCiiFetchedRatings(config);
