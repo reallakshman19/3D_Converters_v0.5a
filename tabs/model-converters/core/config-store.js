@@ -49,7 +49,7 @@ const STORAGE_MASTER_ARRAY_PATHS = Object.freeze([
   ['weight', 'masterRows'],
 ]);
 
-function _storageSafeDefaults(defaultsByConverter) {
+function _storageSafeDefaults(defaultsByConverter, { defaultOnly = false } = {}) {
   let result = defaultsByConverter;
   let cloned = false;
   for (const [converterId, values] of Object.entries(defaultsByConverter || {})) {
@@ -59,21 +59,37 @@ function _storageSafeDefaults(defaultsByConverter) {
     try { config = JSON.parse(json); } catch { continue; }
     let stripped = false;
     const strippedSections = [];
+    const omittedDefaults = [];
     for (const [section, key] of STORAGE_MASTER_ARRAY_PATHS) {
-      if (config && config[section] && Array.isArray(config[section][key]) && config[section][key].length) {
-        config[section][key] = [];
-        stripped = true;
-        strippedSections.push(section);
-      }
+      const master = config?.[section];
+      const rows = master?.[key];
+      if (!Array.isArray(rows) || !rows.length) continue;
+      // The lite autoloader marks Material Map and Valve Weights as replaceable
+      // defaults. They must never force a small Owner-imported line list or
+      // piping-class table out of persistent storage.
+      const autoDefault = (section === 'material' || section === 'weight')
+        && Number(master._autoloadedRows) === rows.length
+        && typeof master._autoloadedFrom === 'string' && master._autoloadedFrom.length > 0;
+      if (defaultOnly && !autoDefault) continue;
+      master[key] = [];
+      stripped = true;
+      if (autoDefault) omittedDefaults.push(section);
+      else strippedSections.push(section);
     }
     if (!stripped) continue;
-    config._mastersStrippedForStorage = true;
-    // Include tables omitted by an earlier save; the expected set survives
-    // reload until all of those tables have actually been re-imported.
-    config._mastersStrippedSectionsForStorage = [
-      ...new Set([...(Array.isArray(config._mastersStrippedSectionsForStorage)
-        ? config._mastersStrippedSectionsForStorage : []), ...strippedSections]),
-    ];
+    if (strippedSections.length) {
+      config._mastersStrippedForStorage = true;
+      config._mastersStrippedSectionsForStorage = [
+        ...new Set([...(Array.isArray(config._mastersStrippedSectionsForStorage)
+          ? config._mastersStrippedSectionsForStorage : []), ...strippedSections]),
+      ];
+    }
+    if (omittedDefaults.length) {
+      config._autoloadDefaultsOmittedForStorage = [
+        ...new Set([...(Array.isArray(config._autoloadDefaultsOmittedForStorage)
+          ? config._autoloadDefaultsOmittedForStorage : []), ...omittedDefaults]),
+      ];
+    }
     if (!cloned) { result = { ...defaultsByConverter }; cloned = true; }
     result[converterId] = { ...values, supportConfigJson: JSON.stringify(config) };
   }
@@ -127,13 +143,19 @@ export function saveStoredState(selectedConverter, defaultsByConverter) {
   perf?.mark?.('xml-cii:config-store:prepare:start');
   const xmlConfigSize = Object.values(defaultsByConverter || {}).reduce(
     (sum, value) => sum + (typeof value?.supportConfigJson === 'string' ? value.supportConfigJson.length : 0), 0);
+  // First omit only reproducible lite-autoload defaults; keep Owner imports.
+  // Fall back to stripping Owner masters only when the remaining payload still
+  // exceeds the browser budget. Never try a multi-megabyte localStorage write.
   let storageDefaults = xmlConfigSize > 750_000
-    ? _storageSafeDefaults(defaultsByConverter) : defaultsByConverter;
+    ? _storageSafeDefaults(defaultsByConverter, { defaultOnly: true }) : defaultsByConverter;
+  let strippedImportedMasters = false;
   const serialize = (defaults) => JSON.stringify({ selectedConverter, defaultsByConverter: defaults });
   let payload = serialize(storageDefaults);
   const payloadBytes = (value) => new TextEncoder().encode(value).byteLength;
-  if (payloadBytes(payload) > MAX_WRITE_BYTES && storageDefaults === defaultsByConverter) {
-    storageDefaults = _storageSafeDefaults(defaultsByConverter);
+  if (payloadBytes(payload) > MAX_WRITE_BYTES) {
+    const reduced = _storageSafeDefaults(storageDefaults);
+    if (reduced !== storageDefaults) strippedImportedMasters = true;
+    storageDefaults = reduced;
     payload = serialize(storageDefaults);
   }
   perf?.mark?.('xml-cii:config-store:prepare:end');
@@ -151,7 +173,8 @@ export function saveStoredState(selectedConverter, defaultsByConverter) {
   };
   try {
     write(payload);
-    return storageDefaults === defaultsByConverter ? 'full' : 'trimmed';
+    return storageDefaults === defaultsByConverter ? 'full'
+      : (strippedImportedMasters ? 'trimmed' : 'autoload-trimmed');
   } catch (error) {
     if (storageDefaults === defaultsByConverter) {
       try {
