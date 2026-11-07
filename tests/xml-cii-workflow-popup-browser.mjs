@@ -107,20 +107,42 @@ async function evalOnce(wsUrl, expression) {
   } finally { ws.close(); }
 }
 
-async function evaluate(wsUrl, expression) {
-  let last;
-  for (let attempt = 0; attempt < 10; attempt++) {
+// The CDP target can retain its app URL in /json while Runtime.evaluate
+// still runs in its initial about:blank context. readyState alone is NOT a
+// navigation barrier; only a loaded document at the expected app origin is.
+export async function waitForAppOrigin(readDocument, expectedOrigin, {
+  attempts = 200, pause = sleep, delayMs = 150,
+} = {}) {
+  let last = '';
+  for (let i = 0; i < attempts; i += 1) {
     try {
-      if (await evalOnce(wsUrl, "document.readyState === 'complete'"))
-        return await evalOnce(wsUrl, expression);
+      const state = await readDocument();
+      if (state?.origin === expectedOrigin && state?.ready === 'complete'
+        && state?.hasBody && state?.href?.startsWith(expectedOrigin + '/')) return state;
+      last = JSON.stringify(state);
     } catch (error) {
       if (!/Execution context was destroyed|Cannot find context|Context with specified id not found/i.test(String(error?.message || error)))
         throw error;
-      last = error;
+      last = String(error?.message || error);
     }
-    await sleep(300);
+    await pause(delayMs);
   }
-  throw Error('Chrome execution context unavailable after 10 retries: ' + String(last?.message || last));
+  throw Error('Chrome app origin never became ready: ' + expectedOrigin + ' (last: ' + last + ')');
+}
+
+async function evaluate(wsUrl, expression, expectedOrigin) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await waitForAppOrigin(async () => JSON.parse(await evalOnce(wsUrl,
+      'JSON.stringify({origin:location.origin,href:location.href,ready:document.readyState,hasBody:Boolean(document.body)})')),
+      expectedOrigin);
+    try {
+      return await evalOnce(wsUrl, expression);
+    } catch (error) {
+      if (!/Execution context was destroyed|Cannot find context|Context with specified id not found/i.test(String(error?.message || error)))
+        throw error;
+    }
+  }
+  throw Error('Chrome navigated during evaluation 3 times');
 }
 
 const CHECK = String.raw`(async () => {
@@ -271,7 +293,8 @@ async function main() {
     { stdio: 'ignore' });
   try {
     const ws = await browserSocket(debugPort, pagePort);
-    const result = await evaluate(ws, CHECK);
+    const origin = 'http://127.0.0.1:' + pagePort;
+    const result = await evaluate(ws, CHECK, origin);
     if (result?.status !== 'PASS' || !result.bridgeNonNull || !result.popupOpen)
       throw Error('Popup browser contract failed: ' + JSON.stringify(result));
     if (bm2Files) {
@@ -279,7 +302,7 @@ async function main() {
         .replaceAll('__MAX_FETCH_MS__', String(Number(arg('max-fetch-ms') || 30000)))
         .replaceAll('__MAX_FIRST_VISIT_MS__', String(Number(arg('max-first-visit-ms') || 420000)))
         .replaceAll('__MAX_STORAGE_BYTES__', String(Number(arg('max-storage-bytes') || 1000000)));
-      result.bm2Budget = await evaluate(ws, budget);
+      result.bm2Budget = await evaluate(ws, budget, origin);
       if (result.bm2Budget?.status !== 'PASS') throw Error('BM2 budget check did not pass');
     }
     console.log(JSON.stringify(result, null, 2));
@@ -313,7 +336,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('R8 popup browser probe FAILED:', error?.stack || error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname) {
+  main().catch((error) => {
+    console.error('R13 popup browser probe FAILED:', error?.stack || error);
+    process.exitCode = 1;
+  });
+}
