@@ -136,6 +136,9 @@ export function installDtxrRatingAction({ host, rootEl, xmlText, config, options
       });
       host.dataset.mcPreviewBuildCompleted = 'true';
       addCacheEvidence(host, { status: 'UNCACHED', reason: 'Rating overrides changed; Rebuild recomputes other suggestions' });
+      // Persist a bounded override journal before the browser can reload while
+      // the full configuration is still being serialized in a Worker.
+      options?.onStageRatingOverrides?.(config);
       notice(ratingFetchMessage(result), result.applied === 0);
 
       // Persistence is deliberately OUTSIDE the user-visible click handler.
@@ -147,7 +150,7 @@ export function installDtxrRatingAction({ host, rootEl, xmlText, config, options
           host.__xmlCiiFetchSaveScheduled = false;
           perf?.mark?.('xml-cii:popup:fetch-save:start');
           try {
-            await options?.onSaveConfig?.(config);
+            await options?.onSaveConfig?.(config, { fetchRating: true });
           } catch (error) {
             if (rootEl?.querySelector?.('#mc-preview-table-host') === host && host.isConnected !== false)
               addNotice(host, `DTXR ratings applied but could not be saved: ${text(error?.message || error)}`, true);
