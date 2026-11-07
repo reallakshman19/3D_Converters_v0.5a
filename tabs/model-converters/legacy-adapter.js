@@ -6779,10 +6779,10 @@ export function renderModelConvertersTab(container) {
         return xmlCiiSaveConfig(config, { compact });
       }
       const previous = defaultsByConverter[selectedConverter] || {};
-      const snapshot = {
+      const snapshot = JSON.parse(JSON.stringify({
         ...defaultsByConverter,
         [selectedConverter]: { ...previous, supportConfigJson: '' },
-      };
+      })); // live run callbacks are functions; storage serialization omits them.
       const pendingSave = new Promise((resolve, reject) => {
         const terminate = () => { try { worker.terminate(); } catch {} };
         worker.onmessage = ({ data }) => {
