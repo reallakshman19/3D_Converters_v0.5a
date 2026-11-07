@@ -134,13 +134,10 @@ export function loadStoredState() {
   return { selectedConverter, defaultsByConverter };
 }
 
-export function saveStoredState(selectedConverter, defaultsByConverter) {
-  // A small config must keep its imported masters across reloads. For a
-  // multi-MB config choose the existing master-stripped format BEFORE setItem,
-  // never attempt the large localStorage write and rely on a quota exception.
-  const perf = typeof performance !== 'undefined' ? performance : null;
-  const MAX_WRITE_BYTES = 1_000_000;
-  perf?.mark?.('xml-cii:config-store:prepare:start');
+// Worker-safe preparation; no storage access and no DOM dependencies.
+// Fetch can execute this on a dedicated worker to keep large master-table
+// serialization off the browser's main thread.
+export function prepareStoredStatePayload(selectedConverter, defaultsByConverter) {
   const xmlConfigSize = Object.values(defaultsByConverter || {}).reduce(
     (sum, value) => sum + (typeof value?.supportConfigJson === 'string' ? value.supportConfigJson.length : 0), 0);
   // First omit only reproducible lite-autoload defaults; keep Owner imports.
@@ -158,29 +155,43 @@ export function saveStoredState(selectedConverter, defaultsByConverter) {
     storageDefaults = reduced;
     payload = serialize(storageDefaults);
   }
+  return {
+    payload, storageDefaults, strippedImportedMasters,
+    status: storageDefaults === defaultsByConverter ? 'full'
+      : (strippedImportedMasters ? 'trimmed' : 'autoload-trimmed'),
+  };
+}
+
+export function writePreparedStoredState(payload) {
+  if (new TextEncoder().encode(payload).byteLength > 1_000_000)
+    throw new Error('persistent defaults exceed 1MB budget');
+  const perf = typeof performance !== 'undefined' ? performance : null;
+  perf?.mark?.('xml-cii:config-store:write:start');
+  try { window.localStorage.setItem(STORAGE_KEY, payload); }
+  finally {
+    perf?.mark?.('xml-cii:config-store:write:end');
+    perf?.measure?.('xml-cii:config-store:write',
+      'xml-cii:config-store:write:start', 'xml-cii:config-store:write:end');
+  }
+}
+
+export function saveStoredState(selectedConverter, defaultsByConverter) {
+  // Retain the synchronous legacy contract for normal config edits.
+  const perf = typeof performance !== 'undefined' ? performance : null;
+  perf?.mark?.('xml-cii:config-store:prepare:start');
+  const { payload, storageDefaults, status } = prepareStoredStatePayload(selectedConverter, defaultsByConverter);
   perf?.mark?.('xml-cii:config-store:prepare:end');
   perf?.measure?.('xml-cii:config-store:prepare',
     'xml-cii:config-store:prepare:start', 'xml-cii:config-store:prepare:end');
-  const write = (value) => {
-    if (payloadBytes(value) > MAX_WRITE_BYTES) throw new Error('persistent defaults exceed 1MB budget');
-    perf?.mark?.('xml-cii:config-store:write:start');
-    try { window.localStorage.setItem(STORAGE_KEY, value); }
-    finally {
-      perf?.mark?.('xml-cii:config-store:write:end');
-      perf?.measure?.('xml-cii:config-store:write',
-        'xml-cii:config-store:write:start', 'xml-cii:config-store:write:end');
-    }
-  };
   try {
-    write(payload);
-    return storageDefaults === defaultsByConverter ? 'full'
-      : (strippedImportedMasters ? 'trimmed' : 'autoload-trimmed');
+    writePreparedStoredState(payload);
+    return status;
   } catch (error) {
     if (storageDefaults === defaultsByConverter) {
       try {
         const compact = _storageSafeDefaults(defaultsByConverter);
         if (compact !== defaultsByConverter) {
-          write(serialize(compact));
+          writePreparedStoredState(JSON.stringify({ selectedConverter, defaultsByConverter: compact }));
           return 'trimmed';
         }
       } catch (innerError) {
