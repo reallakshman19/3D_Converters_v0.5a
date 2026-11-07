@@ -81,6 +81,24 @@ const buildMeasures = measures.filter(entry => blockingBuildPhases.has(entry.nam
   .sort((a, b) => b.durationMs - a.durationMs);
 const backgroundAuthority = measures.filter(entry =>
   entry.name === 'xml-cii:popup:build:authority');
+const dryrunSources = {
+  'xml-cii:dryrun:parse': 'preview-dryrun-core.js:411-416',
+  'xml-cii:dryrun:cleanup': 'preview-dryrun-core.js:424-441',
+  'xml-cii:dryrun:index': 'preview-dryrun-core.js:443-452',
+  'xml-cii:dryrun:lineLookup': 'preview-dryrun-core.js:454-471',
+  'xml-cii:dryrun:branchResolve': 'preview-dryrun-core.js:472-486',
+  'xml-cii:dryrun:dtxrWall': 'preview-dryrun-core.js:515-519',
+  'xml-cii:dryrun:nodeRows': 'preview-dryrun-core.js:588-591',
+};
+// Separate non-overlapping cost buckets from diagnostic subspans.
+const latestDryrun = new Map();
+for (const entry of measures) {
+  if (Object.hasOwn(dryrunSources, entry.name)) latestDryrun.set(entry.name, entry.durationMs);
+}
+const dryrunTop3 = [...latestDryrun].map(([name, durationMs]) => ({
+  name, durationMs, file: dryrunSources[name],
+})).sort((a, b) => b.durationMs - a.durationMs).slice(0, 3);
+
 const output = {
   run: 'PERF-1.R14 BM2 real-Chrome',
   ...fiveTimings,
@@ -92,6 +110,7 @@ const output = {
   outputMatchesExpected: verified,
   maxStorageWriteBytes: report.bm2Budget?.maxWriteBytes ?? null,
   buildCostTop3: buildMeasures.slice(0, 3),
+  dryrunTop3,
   backgroundAuthorityMs: backgroundAuthority.at(-1)?.durationMs ?? null,
 };
 console.log(JSON.stringify(output, null, 2));
