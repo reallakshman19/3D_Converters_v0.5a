@@ -233,6 +233,7 @@ export function xmlCiiRenderPreviewPhase(xmlFile, config) {
 
 export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, options = {}) {
   const { onSaveConfig, openOverridePopup, ensureOverrides, forceBuild = false } = options;
+  const perf = typeof performance !== 'undefined' ? performance : null;
   const host = rootEl?.querySelector('#mc-preview-table-host');
   if (!host || host.isConnected === false || rootEl.isConnected === false) return;
   const generation = options.__previewGeneration === undefined
@@ -240,8 +241,10 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
     : options.__previewGeneration;
   if (!_isCurrentPreviewBuild(rootEl, host, generation)) return;
   // Do not retain the one-shot reserved generation in later button callbacks.
+  const resolvedStagedSource = options.__resolvedStagedSource;
   options = { ...options };
   delete options.__previewGeneration;
+  delete options.__resolvedStagedSource;
 
   // Fail closed for engineering correctness: the former persisted-cache key
   // omitted effective staged JSON, full XML/master contents, and some overrides.
@@ -253,9 +256,15 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
   }
 
   options.onPreviewStarted?.({ generation });
-  const stagedSource = await _resolvePreviewStagedJsonText(options, config);
+  perf?.mark?.('xml-cii:popup:build:staged:start');
+  const stagedSource = resolvedStagedSource || await _resolvePreviewStagedJsonText(options, config);
+  perf?.mark?.('xml-cii:popup:build:staged:end');
+  perf?.measure?.('xml-cii:popup:build:staged', 'xml-cii:popup:build:staged:start', 'xml-cii:popup:build:staged:end');
   if (!_isCurrentPreviewBuild(rootEl, host, generation)) return;
+  perf?.mark?.('xml-cii:popup:build:dryrun:start');
   const { branchRows, nodeRows } = xmlCiiDryRunPreview(xmlText, config, stagedSource.text);
+  perf?.mark?.('xml-cii:popup:build:dryrun:end');
+  perf?.measure?.('xml-cii:popup:build:dryrun', 'xml-cii:popup:build:dryrun:start', 'xml-cii:popup:build:dryrun:end');
   if (!_isCurrentPreviewBuild(rootEl, host, generation)) return;
 
   if (!branchRows.length) {
@@ -390,6 +399,7 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
     }
   });
 
+  perf?.mark?.('xml-cii:popup:build:table:start');
   host.innerHTML = `${_manualPreviewActionHtml('Rebuild Preview', true, config)}<div class="bulk-map-container-host"></div>${table.renderHTML()}`;
   const mapContainer = host.querySelector('.bulk-map-container-host');
   if (mapContainer) {
@@ -419,6 +429,8 @@ export async function xmlCiiBuildAndRenderPreview(rootEl, xmlText, config, optio
   table.bind(host);
   _bindDtxrWallUpdateButton({ host, branchRows, config, ensureOverrides, onSaveConfig, stagedSourceLabel: stagedSource.label });
   if (!_isCurrentPreviewBuild(rootEl, host, generation)) return;
+  perf?.mark?.('xml-cii:popup:build:table:end');
+  perf?.measure?.('xml-cii:popup:build:table', 'xml-cii:popup:build:table:start', 'xml-cii:popup:build:table:end');
   // Notify the caller only after the calculated Preview has rendered and bound its actions.
   await options.onPreviewCommitted?.({ branchRows, nodeRows, stagedJsonText: stagedSource.text, stagedSourceLabel: stagedSource.label, generation });
 }
