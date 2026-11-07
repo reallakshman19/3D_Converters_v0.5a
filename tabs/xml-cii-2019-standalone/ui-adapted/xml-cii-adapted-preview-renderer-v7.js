@@ -147,7 +147,6 @@ export function installDtxrRatingAction({ host, rootEl, xmlText, config, options
       if (!host.__xmlCiiFetchSaveScheduled) {
         host.__xmlCiiFetchSaveScheduled = true;
         const saveAfterPaint = async () => {
-          host.__xmlCiiFetchSaveScheduled = false;
           perf?.mark?.('xml-cii:popup:fetch-save:start');
           try {
             await options?.onSaveConfig?.(config, { fetchRating: true });
@@ -155,6 +154,7 @@ export function installDtxrRatingAction({ host, rootEl, xmlText, config, options
             if (rootEl?.querySelector?.('#mc-preview-table-host') === host && host.isConnected !== false)
               addNotice(host, `DTXR ratings applied but could not be saved: ${text(error?.message || error)}`, true);
           } finally {
+            host.__xmlCiiFetchSaveScheduled = false;
             perf?.mark?.('xml-cii:popup:fetch-save:end');
             perf?.measure?.('xml-cii:popup:fetch-save',
               'xml-cii:popup:fetch-save:start', 'xml-cii:popup:fetch-save:end');
