@@ -5,14 +5,21 @@
  */
 export function commitXmlCiiPreparedSave({
   payload, fullJson, status, isCurrent, writePayload, setConfig, clearJournal,
+  onFailure = () => {},
   defer = fn => setTimeout(fn, 0),
 }) {
   return new Promise((resolve, reject) => {
     const superseded = () => { resolve('superseded'); };
+    const fail = error => {
+      if (isCurrent()) {
+        try { onFailure(error); } catch {}
+      }
+      reject(error);
+    };
     defer(() => {
       if (!isCurrent()) return superseded();
       try { writePayload(payload); }
-      catch (error) { reject(error); return; }
+      catch (error) { fail(error); return; }
       defer(() => {
         if (!isCurrent()) return superseded();
         try { setConfig(fullJson); }
