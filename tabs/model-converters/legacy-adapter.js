@@ -6845,7 +6845,9 @@ export function renderModelConvertersTab(container) {
             onFailure: clearXmlCiiFetchedRatingsJournal,
           });
           onCommit.then(status => {
-            if (status === 'superseded') { resolve(status); return; }
+            if (status === 'superseded' || generation !== xmlCiiConfigSaveGeneration) {
+              resolve('superseded'); return;
+            }
             if (data.status === 'trimmed' && !xmlCiiMasterStorageWarningShown) {
               xmlCiiMasterStorageWarningShown = true;
               notify({ level: 'info', title: 'XML->CII Masters',
