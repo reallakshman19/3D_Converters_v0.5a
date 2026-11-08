@@ -6768,6 +6768,22 @@ export function renderModelConvertersTab(container) {
   let xmlCiiConfigSaveGeneration = 0;
   let xmlCiiPendingFetchSave = null;
   let xmlCiiAbortFetchWorker = null;
+  let xmlCiiPendingFetchBarrier = null;
+  function xmlCiiStageFetchSaveBarrier() {
+    if (xmlCiiPendingFetchBarrier) return;
+    let resolve, reject;
+    const pending = new Promise((ok, fail) => { resolve = ok; reject = fail; });
+    // Always attach a rejection observer, including when no Run is waiting.
+    pending.catch(() => {});
+    xmlCiiPendingFetchBarrier = { pending, resolve, reject };
+  }
+  function xmlCiiCompleteFetchSaveBarrier(error = null) {
+    const barrier = xmlCiiPendingFetchBarrier;
+    xmlCiiPendingFetchBarrier = null;
+    if (!barrier) return;
+    if (error) barrier.reject(error);
+    else barrier.resolve();
+  }
   function xmlCiiSaveConfig(config, { compact = false, background = false } = {}) {
     const generation = ++xmlCiiConfigSaveGeneration;
     if (background && typeof Worker === 'function') {
@@ -7971,11 +7987,22 @@ export function renderModelConvertersTab(container) {
       if (!target.isConnected || target.querySelector('#mc-preview-table-host') !== host) return;
       const config = xmlCiiConfigWithLoadedMasterRows('XML->CII popup v7 preview');
       await xmlCiiBuildAndRenderPreviewV7(target, xmlText, config, {
-        onSaveConfig: (newConfig, source = {}) => xmlCiiSaveConfig(newConfig, {
-          compact: true, background: source.fetchRating === true,
-        }),
+        onSaveConfig: async (newConfig, source = {}) => {
+          try {
+            const status = await xmlCiiSaveConfig(newConfig, {
+              compact: true, background: source.fetchRating === true,
+            });
+            if (source.fetchRating && status !== 'superseded')
+              xmlCiiCompleteFetchSaveBarrier();
+            return status;
+          } catch (error) {
+            if (source.fetchRating) xmlCiiCompleteFetchSaveBarrier(error);
+            throw error;
+          }
+        },
         onStageRatingOverrides: (newConfig, { previousFetchedKeys = [] } = {}) => {
           stageXmlCiiFetchedRatings(newConfig.overrides, previousFetchedKeys);
+          xmlCiiStageFetchSaveBarrier();
           // Stage-time invalidation, not save-time invalidation: an older
           // Worker must never commit or clear a newer Fetch's journal.
           ++xmlCiiConfigSaveGeneration;
@@ -9563,10 +9590,10 @@ export function renderModelConvertersTab(container) {
   });
 
   runBtnEl.addEventListener('click', async () => {
-    if (selectedConverter === 'xml_to_cii' && xmlCiiPendingFetchSave) {
-      // Fetch is visually complete before worker persistence completes.
-      // Run must use the updated full config rather than stale activeValues.
-      try { await xmlCiiPendingFetchSave; }
+    if (selectedConverter === 'xml_to_cii' && xmlCiiPendingFetchBarrier) {
+      // Stage-time barrier covers the rAF gap BEFORE a Worker is created.
+      // Superseded workers cannot release it; only the latest save can.
+      try { await xmlCiiPendingFetchBarrier.pending; }
       catch (error) {
         notify({ level: 'error', title: 'XML->CII config save', message: String(error?.message || error) });
         return;
