@@ -113,3 +113,47 @@ test('J4: failed prepared commit leaves no stale rating journal', async () => {
     assert.equal(disk.has('model-converters.xml-cii.fetch-rating-journal.v1'), false);
   } finally { globalThis.window = prev; }
 });
+
+
+test('J4: newer Fetch staged between storage write and live-config swap preserves its journal', async () => {
+  const prior = globalThis.window;
+  const disk = new Map();
+  globalThis.window = { localStorage: {
+    setItem(k,v) { disk.set(k,v); }, getItem:k => disk.get(k) ?? null,
+    removeItem:k => disk.delete(k),
+  } };
+  try {
+    let generation = 1;
+    const tasks = [];
+    let live = '';
+    let clears = 0;
+    const make = (gen, label) => commitXmlCiiPreparedSave({
+      payload: label, fullJson: label, status: 'full',
+      isCurrent: () => gen === generation,
+      writePayload: val => disk.set('committed', val),
+      setConfig: val => { live = val; },
+      clearJournal: () => { clears++; clearXmlCiiFetchedRatingsJournal(); },
+      defer: fn => tasks.push(fn),
+    });
+    stageXmlCiiFetchedRatings({
+      rating: { B1: '150' }, __dtxrRatingKeys: { B1: true },
+    }, ['B1']);
+    const old = make(generation, 'old');
+    tasks.shift()(); // Old storage write has just happened
+    generation++;
+    stageXmlCiiFetchedRatings({
+      rating: { B1: '900' }, __dtxrRatingKeys: { B1: true },
+    }, ['B1']);
+    while (tasks.length) { tasks.shift()(); await Promise.resolve(); }
+    assert.equal(await old, 'superseded');
+    assert.equal(live, '', 'obsolete commit cannot install old active config');
+    assert.equal(clears, 0, 'obsolete commit cannot delete newer journal');
+    assert.equal(JSON.parse(disk.get('model-converters.xml-cii.fetch-rating-journal.v1')).rating.B1, '900');
+    const latest = make(generation, 'latest');
+    while (tasks.length) { tasks.shift()(); await Promise.resolve(); }
+    assert.equal(await latest, 'full');
+    assert.equal(live, 'latest');
+    assert.equal(disk.get('committed'), 'latest');
+    assert.equal(clears, 1);
+  } finally { globalThis.window = prior; }
+});
