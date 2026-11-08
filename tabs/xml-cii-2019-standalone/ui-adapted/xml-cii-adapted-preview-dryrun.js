@@ -4,6 +4,7 @@ import { xmlCiiDryRunPreview as buildCorePreview } from './xml-cii-adapted-previ
 import { applyPreviewBoreWallAuthority } from './xml-cii-adapted-preview-bore-wall-authority.js';
 import { applyPreviewMaterialCodeAuthority } from './xml-cii-adapted-preview-material-authority.js';
 import { applyPreviewRatingAuthority } from './xml-cii-adapted-preview-rating-authority.js';
+import { buildStagedDtxrIndex } from '../../../converters/xml-cii2019-core/dtxr-resolver.js';
 
 const AUTOMATIC_LINE_MATCH_METHODS = new Set(['similar-lineseq', 'similar-linekey']);
 const LINE_AUTHORITY_VERSION = 'strict-explicit-or-exact-v1';
@@ -167,22 +168,61 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     .catch((error) => console.error('Failed to install XML→CII effective-class shard hydrator:', error));
 }
 
-export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
-  const coreResult = buildStrictLineAuthorityCorePreview(xmlText, config, stagedJsonText);
-  const wallResult = applyPreviewBoreWallAuthority({
-    xmlText,
-    config,
-    stagedJsonText,
-    result: coreResult,
+export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText, runtime = {}) {
+  const perf = typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance : null;
+  const totalStart = perf?.now() ?? 0;
+  const layer = (name, fn) => {
+    const started = perf?.now() ?? 0;
+    try { return fn(); }
+    finally {
+      if (perf) {
+        try { perf.measure('xml-cii:dryrun:layer:' + name,
+          { start: started, duration: perf.now() - started }); } catch {}
+      }
+    }
+  };
+  const parse = runtime.parseDocument || ((input) => {
+    if (typeof DOMParser === 'undefined') return null;
+    try {
+      const parsed = new DOMParser().parseFromString(String(input ?? ''), 'application/xml');
+      return parsed.getElementsByTagName('parsererror').length ? null : parsed;
+    } catch { return null; }
   });
-  const materialResult = applyPreviewMaterialCodeAuthority({
-    config,
-    result: wallResult,
-  });
-  return applyPreviewRatingAuthority({
-    xmlText,
-    config,
-    stagedJsonText,
-    result: materialResult,
-  });
+
+  // Share unmodified source DOM between Bore/Wall and Rating; the core must
+  // clone before node cleanup or the post-core authorities would lose GASK
+  // and short-node evidence that they previously read from fresh XML parses.
+  const sourceDocument = layer('source-parse', () => parse(xmlText));
+  // Index staging once for the main core and Rating pass. Strict line-list
+  // fallback fragments have a different config and must build their own index.
+  const stagedIndex = sourceDocument ? layer('staged-index', () =>
+    (runtime.buildStagedIndex || buildStagedDtxrIndex)(stagedJsonText || '', config)) : null;
+  const strict = runtime.buildStrict || buildStrictLineAuthorityCorePreview;
+  const core = runtime.buildCore || buildCorePreview;
+  const coreResult = layer('strict-core', () => strict(xmlText, config, stagedJsonText, {
+    buildCorePreview: (input, cfg, staged) => input === xmlText && cfg === config &&
+      staged === stagedJsonText
+      ? core(input, cfg, staged, { sourceDocument, stagedIndex })
+      : core(input, cfg, staged),
+    branchFragments: runtime.branchFragments,
+  }));
+  const wallResult = layer('bore-wall', () =>
+    (runtime.applyWall || applyPreviewBoreWallAuthority)({
+      xmlText, config, stagedJsonText, result: coreResult, sourceDocument,
+    }));
+  const materialResult = layer('material', () =>
+    (runtime.applyMaterial || applyPreviewMaterialCodeAuthority)({
+      config, result: wallResult,
+    }));
+  const ratingResult = layer('rating', () =>
+    (runtime.applyRating || applyPreviewRatingAuthority)({
+      xmlText, config, stagedJsonText, result: materialResult,
+      sourceDocument, stagedIndex,
+    }));
+  if (perf) {
+    try { perf.measure('xml-cii:dryrun:layer:total',
+      { start: totalStart, duration: perf.now() - totalStart }); } catch {}
+  }
+  return ratingResult;
 }
