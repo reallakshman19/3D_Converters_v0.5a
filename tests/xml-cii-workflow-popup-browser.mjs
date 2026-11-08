@@ -369,6 +369,36 @@ const BM2_CHECK = String.raw`(async () => {
           }
         }
         const engineInput = window.__xmlCiiBm2EngineInput;
+        if (typeof engineInput?.text === 'string') {
+          // Diagnostic-only IDs. The contracted-direction Python exception
+          // does not identify its offending edge; list REDU records and
+          // missing AlphaAngle owners from the exact worker input.
+          const parsed = new DOMParser().parseFromString(engineInput.text, 'application/xml');
+          const local = n => String(n?.localName || n?.nodeName || '').replace(/^.*:/, '');
+          const child = (parent, key) => {
+            for (const n of parent?.childNodes || []) {
+              if (n.nodeType === 1 && local(n) === key) return String(n.textContent || '').trim();
+            }
+            return '';
+          };
+          const candidates = [];
+          for (const branch of parsed.getElementsByTagName('Branch')) {
+            const branchName = child(branch, 'Branchname');
+            for (const node of branch.getElementsByTagName('Node')) {
+              const type = child(node, 'ComponentType').toUpperCase();
+              if (type !== 'REDU') continue;
+              candidates.push({
+                branchName, nodeNumber: child(node, 'NodeNumber'),
+                componentRefNo: child(node, 'ComponentRefNo'),
+                endpoint: child(node, 'Endpoint'),
+                alphaAngle: child(node, 'AlphaAngle'),
+              });
+            }
+          }
+          phase.reducerCandidates = candidates.slice(0, 50);
+          phase.reducerCount = candidates.length;
+          phase.reducerMissingAlphaCount = candidates.filter(c => !c.alphaAngle).length;
+        }
         if (!blob && typeof engineInput?.text === 'string') {
           blob = new Blob([engineInput.text], { type: 'text/xml;charset=utf-8' });
           phase.outputFile = engineInput.name;
