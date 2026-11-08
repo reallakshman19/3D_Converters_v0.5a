@@ -6780,10 +6780,10 @@ export function renderModelConvertersTab(container) {
         return xmlCiiSaveConfig(config, { compact });
       }
       const previous = defaultsByConverter[selectedConverter] || {};
-      const snapshot = {
+      const snapshot = JSON.parse(JSON.stringify({
         ...defaultsByConverter,
         [selectedConverter]: { ...previous, supportConfigJson: '' },
-      }; // callback-free, serializable selected converter snapshot.
+      })); // only compact other-converter defaults; selected 1.8MB config omitted.
       const pendingSave = new Promise((resolve, reject) => {
         let settled = false;
         const terminate = () => {
