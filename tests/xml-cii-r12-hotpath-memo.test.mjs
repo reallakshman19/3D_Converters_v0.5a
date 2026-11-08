@@ -64,9 +64,10 @@ test('R13 G1 Fetch Rating retains apply and deferred-save marks after removing r
 test('R12 E3 v7 Fetch save uses compact but semantically identical config serialization', async () => {
   const { readFile } = await import('node:fs/promises');
   const src = await readFile(new URL('../tabs/model-converters/legacy-adapter.js', import.meta.url), 'utf8');
-  assert.match(src, /function xmlCiiSaveConfig\(config, \{ compact = false \} = \{\}\)/);
+  assert.match(src, /function xmlCiiSaveConfig\(config, \{ compact = false, background = false \} = \{\}\)/);
   assert.match(src, /JSON\.stringify\(config, null, compact \? 0 : 2\)/);
-  assert.match(src, /xmlCiiBuildAndRenderPreviewV7\(target, xmlText, config,[\s\S]{0,170}onSaveConfig: \(newConfig\) => xmlCiiSaveConfig\(newConfig, \{ compact: true \}\)/);
+  assert.match(src, /onSaveConfig: \(newConfig, source = \{\}\) => xmlCiiSaveConfig\(newConfig, \{/);
+  assert.match(src, /background: source.fetchRating === true/);
   const sample = { linelist: { masterRows: [{ lineNo: 'L01' }] },
     overrides: { rating: { '/GLRD/B6': '150' } }, pipingClass: { masterRows: [{ class: 'P4110001' }] } };
   assert.deepEqual(JSON.parse(JSON.stringify(sample, null, 0)),
