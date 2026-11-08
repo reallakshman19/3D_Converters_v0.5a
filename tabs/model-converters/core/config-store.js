@@ -6,8 +6,26 @@ const FETCH_RATING_JOURNAL = 'model-converters.xml-cii.fetch-rating-journal.v1';
 // The small, synchronous Fetch journal is replayed when the page reloads
 // before the background full-config serializer can finish. It is never a
 // Preview row cache or a replacement for the Owner's imported masters.
-export function stageXmlCiiFetchedRatings(overrides) {
-  const payload = JSON.stringify({ overrides });
+export function stageXmlCiiFetchedRatings(overrides, previousFetchedKeys = []) {
+  const source = overrides && typeof overrides === 'object' ? overrides : {};
+  const touchedKeys = [...new Set([
+    ...previousFetchedKeys,
+    ...Object.keys(source.__dtxrRatingKeys || {}),
+  ])];
+  const rating = {};
+  const processRating = {};
+  for (const key of touchedKeys) {
+    if (Object.hasOwn(source.rating || {}, key)) rating[key] = source.rating[key];
+    if (Object.hasOwn(source.processData?.[key] || {}, 'rating'))
+      processRating[key] = source.processData[key].rating;
+  }
+  const payload = JSON.stringify({
+    version: 2,
+    touchedKeys,
+    rating,
+    processRating,
+    fetchedKeys: source.__dtxrRatingKeys || {},
+  });
   if (new TextEncoder().encode(payload).byteLength > 1_000_000)
     throw new Error('Fetch rating journal exceeds browser storage budget');
   window.localStorage.setItem(FETCH_RATING_JOURNAL, payload);
@@ -20,13 +38,29 @@ export function applyStagedXmlCiiFetchedRatings(config) {
     const raw = window.localStorage.getItem(FETCH_RATING_JOURNAL);
     if (!raw) return config;
     const patch = JSON.parse(raw);
-    if (patch?.overrides && typeof patch.overrides === 'object' && !Array.isArray(patch.overrides)) {
-      config.overrides = patch.overrides;
+    if (patch?.version !== 2 || !Array.isArray(patch.touchedKeys)) return config;
+    const base = config?.overrides && typeof config.overrides === 'object'
+      && !Array.isArray(config.overrides) ? config.overrides : {};
+    const overrides = { ...base };
+    const rating = { ...(base.rating || {}) };
+    const processData = { ...(base.processData || {}) };
+    for (const key of patch.touchedKeys) {
+      if (Object.hasOwn(patch.rating || {}, key)) rating[key] = patch.rating[key];
+      else delete rating[key];
+      const processRow = { ...(processData[key] || {}) };
+      if (Object.hasOwn(patch.processRating || {}, key))
+        processRow.rating = patch.processRating[key];
+      else delete processRow.rating;
+      if (Object.keys(processRow).length) processData[key] = processRow;
+      else delete processData[key];
     }
+    overrides.rating = rating;
+    overrides.processData = processData;
+    overrides.__dtxrRatingKeys = { ...(patch.fetchedKeys || {}) };
+    config.overrides = overrides;
   } catch {}
   return config;
 }
-
 
 function _clone(obj) {
   if (obj === undefined) return undefined;
