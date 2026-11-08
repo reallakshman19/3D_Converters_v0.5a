@@ -282,48 +282,70 @@ const BM2_CHECK = String.raw`(async () => {
     if (phase.fetchRatingMs > __MAX_FETCH_MS__)
       throw Error('BM2 Fetch Rating exceeded budget: ' + Math.round(phase.fetchRatingMs) + ' ms');
     if (__CAPTURE_OUTPUT__) {
-      // Capture the *actual* converter output, via its production Download
-      // button; hashing an input, synthetic XML, or Preview rows is not valid.
+      // The production converter can fail after emitting the exact enriched
+      // XML to the Python worker. Capture that real engine-bound payload even
+      // when a failed conversion leaves the Download UI empty.
+      window.__xmlCiiBm2CaptureEngineInput = true;
+      delete window.__xmlCiiBm2EngineInput;
       const run = document.querySelector('#model-converters-run');
       if (!run) throw Error('Main XML->CII Run button missing');
       const created = [];
       const realCreate = URL.createObjectURL.bind(URL);
-      URL.createObjectURL = (blob) => { created.push(blob); return realCreate(blob); };
+      URL.createObjectURL = blob => { created.push(blob); return realCreate(blob); };
       try {
         await new Promise(ok => setTimeout(ok, 100));
         run.click();
-        // The production runner may request human review of 175 zero-weight
-        // rigid nodes. Evidence mode must not hang on that modal. Choose the
-        // existing explicit Skip Review action: it leaves zero weights unchanged
-        // and continues the engine; never fabricate or hash Preview XML.
         const { waitForXmlCiiEngineOutput } = await import(
           new URL('/tabs/model-converters/workflow/bm2-evidence-review-gate.js', location.href).href);
         const review = await waitForXmlCiiEngineOutput({
           hasOutput: () => !!document.querySelector('#model-converters-output [data-output-index]'),
           reviewSkipButton: () => document.querySelector('.mc-rigid-review-overlay [data-rigid-review-skip]'),
+          reviewVisible: () => !!document.querySelector('.mc-rigid-review-overlay'),
+          readFailure: () => {
+            const status = document.querySelector('#model-converters-status');
+            const message = String(status?.textContent || '');
+            return status?.classList?.contains('bad') && /^Failed:/i.test(message)
+              ? message : '';
+          },
           maxMs: __MAX_RUN_MS__,
         });
         phase.rigidReviewSkipped = review.skipped;
-        phase.outputSource = review.outputSource;
-        const downloads = [...document.querySelectorAll('#model-converters-output [data-output-index]')];
-        const enriched = downloads.find(button => /enrich.*\.xml$/i.test(
-          button.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || ''
-        )) || downloads.find(button => /\.xml$/i.test(
-          button.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || ''
-        ));
-        if (!enriched) throw Error('No XML output to hash; output list: ' +
-          downloads.map(button => button.closest('.model-converters-output-row')?.querySelector('strong')?.textContent).join(', '));
-        enriched.click();
-        const blob = created.at(-1);
-        if (!blob) throw Error('Output Download did not supply a Blob');
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        const digest = await crypto.subtle.digest('SHA-256', bytes);
-        phase.outputBytes = bytes.byteLength;
-        phase.outputSha256 = [...new Uint8Array(digest)]
-          .map(byte => byte.toString(16).padStart(2, '0')).join('');
-        phase.outputFile = enriched.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || '';
+        if (review.failed) phase.runError = review.error;
+        let blob = null;
+        if (!review.failed) {
+          const downloads = [...document.querySelectorAll('#model-converters-output [data-output-index]')];
+          const enriched = downloads.find(button => /enrich.*\.xml$/i.test(
+            button.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || ''
+          )) || downloads.find(button => /\.xml$/i.test(
+            button.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || ''
+          ));
+          if (enriched) {
+            enriched.click();
+            blob = created.at(-1) || null;
+            phase.outputFile = enriched.closest('.model-converters-output-row')?.querySelector('strong')?.textContent || '';
+            phase.outputSource = 'production converter output Download';
+          }
+        }
+        const engineInput = window.__xmlCiiBm2EngineInput;
+        if (!blob && typeof engineInput?.text === 'string') {
+          blob = new Blob([engineInput.text], { type: 'text/xml;charset=utf-8' });
+          phase.outputFile = engineInput.name;
+          phase.outputSource = engineInput.source;
+        }
+        if (!blob && !review.failed) phase.runError = 'No production enriched XML available to hash';
+        if (blob) {
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          const digest = await crypto.subtle.digest('SHA-256', bytes);
+          phase.outputBytes = bytes.byteLength;
+          phase.outputSha256 = [...new Uint8Array(digest)]
+            .map(byte => byte.toString(16).padStart(2, '0')).join('');
+        }
+      } catch (error) {
+        phase.runError = String(error?.message || error);
       } finally {
         URL.createObjectURL = realCreate;
+        window.__xmlCiiBm2CaptureEngineInput = false;
+        delete window.__xmlCiiBm2EngineInput;
       }
     }
   } finally {
@@ -336,7 +358,7 @@ const BM2_CHECK = String.raw`(async () => {
   const measures = performance.getEntriesByType('measure')
     .filter(entry => entry.name.startsWith('xml-cii:'))
     .map(entry => ({ name: entry.name, durationMs: entry.duration }));
-  return { status: 'PASS', bm2: true, phase, maxWriteBytes: Math.max(0, ...writes.map(x=>x.bytes)),
+  return { status: phase.runError ? 'RUN_FAILED' : 'PASS', bm2: true, phase, maxWriteBytes: Math.max(0, ...writes.map(x=>x.bytes)),
     storageWrites: writes, popupPerformanceMeasures: measures };
 })()`;
 
@@ -374,7 +396,9 @@ async function main() {
         .replaceAll('__MAX_FIRST_VISIT_MS__', String(Number(arg('max-first-visit-ms') || 420000)))
         .replaceAll('__MAX_STORAGE_BYTES__', String(Number(arg('max-storage-bytes') || 1000000)));
       result.bm2Budget = await evaluate(ws, budget, origin);
-      if (result.bm2Budget?.status !== 'PASS') throw Error('BM2 budget check did not pass');
+      // Preserve the complete five-action report and the engine SHA on a
+      // real converter failure; the caller exits non-zero after printing it.
+      if (result.bm2Budget?.status !== 'PASS') process.exitCode = 1;
     }
     console.log(JSON.stringify(result, null, 2));
   } finally {
