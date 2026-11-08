@@ -18,7 +18,7 @@ test('F2 popup Step 4 is routed to adapted v7 Build/Rebuild rather than v5', asy
   assert.match(src, /xmlCiiBuildAndRenderPreview as xmlCiiBuildAndRenderPreviewV7/);
   assert.match(src, /xmlCiiRenderPreviewPhase as xmlCiiRenderPreviewPhaseV7/);
   assert.match(src, /phaseId === 'preview'\) html = xmlCiiRenderPreviewPhaseV7/);
-  assert.match(src, /phaseId === 'preview'\) void xmlCiiInitializePopupPreviewV7\(target\)/);
+  assert.match(src, /phaseId === 'preview'\) void armFirstXmlCiiPreviewBuild\(target,/);
   assert.match(src, /await xmlCiiBuildAndRenderPreviewV7\(target, xmlText, config,/);
   assert.doesNotMatch(src, /phaseId === 'preview'\) html = xmlCiiRenderPreviewPhase\(proxyRoot\)/);
   assert.doesNotMatch(src, /phaseId === 'preview'\) bindXmlCiiPreviewPhase\(target\)/);
