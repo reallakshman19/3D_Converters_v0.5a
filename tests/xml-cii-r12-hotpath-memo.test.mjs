@@ -66,7 +66,8 @@ test('R12 E3 v7 Fetch save uses compact but semantically identical config serial
   const src = await readFile(new URL('../tabs/model-converters/legacy-adapter.js', import.meta.url), 'utf8');
   assert.match(src, /function xmlCiiSaveConfig\(config, \{ compact = false, background = false \} = \{\}\)/);
   assert.match(src, /JSON\.stringify\(config, null, compact \? 0 : 2\)/);
-  assert.match(src, /onSaveConfig: \(newConfig, source = \{\}\) => xmlCiiSaveConfig\(newConfig, \{/);
+  assert.match(src, /onSaveConfig: async \(newConfig, source = \{\}\) => \{/);
+  assert.match(src, /const status = await xmlCiiSaveConfig\(newConfig, \{/);
   assert.match(src, /background: source.fetchRating === true/);
   const sample = { linelist: { masterRows: [{ lineNo: 'L01' }] },
     overrides: { rating: { '/GLRD/B6': '150' } }, pipingClass: { masterRows: [{ class: 'P4110001' }] } };
