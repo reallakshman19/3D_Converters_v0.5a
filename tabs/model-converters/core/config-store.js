@@ -38,7 +38,12 @@ export function applyStagedXmlCiiFetchedRatings(config) {
     const raw = window.localStorage.getItem(FETCH_RATING_JOURNAL);
     if (!raw) return config;
     const patch = JSON.parse(raw);
-    if (patch?.version !== 2 || !Array.isArray(patch.touchedKeys)) return config;
+    if (patch?.version !== 2 || !Array.isArray(patch.touchedKeys)) {
+      // R14's whole-overrides journal cannot be safely merged. Retire it
+      // rather than retaining a stale cross-version rating override forever.
+      clearXmlCiiFetchedRatingsJournal();
+      return config;
+    }
     const base = config?.overrides && typeof config.overrides === 'object'
       && !Array.isArray(config.overrides) ? config.overrides : {};
     const overrides = { ...base };
@@ -58,7 +63,9 @@ export function applyStagedXmlCiiFetchedRatings(config) {
     overrides.processData = processData;
     overrides.__dtxrRatingKeys = { ...(patch.fetchedKeys || {}) };
     config.overrides = overrides;
-  } catch {}
+  } catch {
+    clearXmlCiiFetchedRatingsJournal();
+  }
   return config;
 }
 
