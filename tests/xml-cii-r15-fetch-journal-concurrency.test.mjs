@@ -157,3 +157,21 @@ test('J4: newer Fetch staged between storage write and live-config swap preserve
     assert.equal(clears, 1);
   } finally { globalThis.window = prior; }
 });
+
+
+test('J4: obsolete R14 whole-overrides and malformed journals are discarded safely', () => {
+  withStorage(({ disk }) => {
+    const key = 'model-converters.xml-cii.fetch-rating-journal.v1';
+    const cfg = { overrides: { corrosion: { P1: '4' }, rating: { MANUAL: '300' } } };
+    for (const invalid of [
+      JSON.stringify({ overrides: { rating: { MANUAL: 'wrong' } } }),
+      '{not valid json',
+    ]) {
+      disk.set(key, invalid);
+      applyStagedXmlCiiFetchedRatings(cfg);
+      assert.equal(disk.has(key), false);
+      assert.equal(cfg.overrides.corrosion.P1, '4');
+      assert.equal(cfg.overrides.rating.MANUAL, '300');
+    }
+  });
+});
