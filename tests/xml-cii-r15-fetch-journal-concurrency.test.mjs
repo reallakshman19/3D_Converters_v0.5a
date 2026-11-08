@@ -106,11 +106,10 @@ test('J4: failed prepared commit leaves no stale rating journal', async () => {
       writePayload: () => { throw Error('localStorage is blocked'); },
       setConfig: () => { throw Error('should not execute'); },
       clearJournal: clearXmlCiiFetchedRatingsJournal,
+      onFailure: clearXmlCiiFetchedRatingsJournal,
       defer: fn => fn(),
     });
     await assert.rejects(run, /localStorage is blocked/);
-    // Production onCommit failure handler clears journal only for current gen.
-    clearXmlCiiFetchedRatingsJournal();
     assert.equal(disk.has('model-converters.xml-cii.fetch-rating-journal.v1'), false);
   } finally { globalThis.window = prev; }
 });
