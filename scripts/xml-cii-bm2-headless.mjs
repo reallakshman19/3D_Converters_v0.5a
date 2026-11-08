@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PERF-1.R14 H4: standalone, zero-dependency BM2 real-Chrome evidence runner.
+ * PERF-1.R15 J1: standalone, zero-dependency BM2 real-Chrome evidence runner.
  *
  * node scripts/xml-cii-bm2-headless.mjs --xml /path/BM2.xml \
  *   --staged /path/STF.json --config /path/GLRD-INPUTS\\derived\\bm2-workbench-config.json
@@ -51,15 +51,13 @@ const exitCode = await new Promise((ok, fail) => {
   child.once('exit', (code, signal) => ok(code ?? (signal ? 1 : 0)));
   child.once('error', fail);
 });
-if (exitCode !== 0) {
-  console.error(stderr || stdout || 'BM2 Chrome gate failed');
-  process.exit(exitCode || 1);
-}
+// A converter failure is reported as valid JSON plus process exit 1. Parse
+// and print the five completed action spans before propagating that exit.
 let report;
 try { report = JSON.parse(stdout); }
 catch {
   console.error('BM2 Chrome runner produced no valid JSON:', stdout, stderr);
-  process.exit(1);
+  process.exit(exitCode || 1);
 }
 const values = report.bm2Budget?.phase || {};
 const fiveTimings = {
@@ -100,11 +98,14 @@ const dryrunTop3 = [...latestDryrun].map(([name, durationMs]) => ({
 })).sort((a, b) => b.durationMs - a.durationMs).slice(0, 3);
 
 const output = {
-  run: 'PERF-1.R14 BM2 real-Chrome',
+  run: 'PERF-1.R15 BM2 real-Chrome',
   ...fiveTimings,
   outputBytes: values.outputBytes ?? null,
   outputSha256: values.outputSha256 ?? null,
   outputFile: values.outputFile ?? null,
+  converterFailure: values.runError ?? null,
+  converterStatus: report.bm2Budget?.status ?? null,
+  browserGateExitCode: exitCode,
   outputSource: values.outputSource ?? null,
   rigidReviewSkipped: values.rigidReviewSkipped ?? false,
   outputMatchesExpected: verified,
@@ -114,5 +115,7 @@ const output = {
   backgroundAuthorityMs: backgroundAuthority.at(-1)?.durationMs ?? null,
 };
 console.log(JSON.stringify(output, null, 2));
-if (Object.values(fiveTimings).some(value => !Number.isFinite(value))
+if (exitCode !== 0 || values.runError
+  || Object.values(fiveTimings).some(value => !Number.isFinite(value))
   || !verified || output.maxStorageWriteBytes > 1000000) process.exitCode = 1;
+if (values.runError) console.error('BM2 production converter failed: ' + values.runError);
