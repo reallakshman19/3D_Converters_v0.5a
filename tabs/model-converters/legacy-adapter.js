@@ -6766,6 +6766,7 @@ export function renderModelConvertersTab(container) {
 
   let xmlCiiConfigSaveGeneration = 0;
   let xmlCiiPendingFetchSave = null;
+  let xmlCiiAbortFetchWorker = null;
   function xmlCiiSaveConfig(config, { compact = false, background = false } = {}) {
     const generation = ++xmlCiiConfigSaveGeneration;
     if (background && typeof Worker === 'function') {
@@ -6779,17 +6780,33 @@ export function renderModelConvertersTab(container) {
         return xmlCiiSaveConfig(config, { compact });
       }
       const previous = defaultsByConverter[selectedConverter] || {};
-      const snapshot = JSON.parse(JSON.stringify({
+      const snapshot = {
         ...defaultsByConverter,
         [selectedConverter]: { ...previous, supportConfigJson: '' },
-      })); // live run callbacks are functions; storage serialization omits them.
+      }; // callback-free, serializable selected converter snapshot.
       const pendingSave = new Promise((resolve, reject) => {
-        const terminate = () => { try { worker.terminate(); } catch {} };
+        let settled = false;
+        const terminate = () => {
+          if (settled) return false;
+          settled = true;
+          clearTimeout(timeout);
+          if (xmlCiiAbortFetchWorker === abort) xmlCiiAbortFetchWorker = null;
+          try { worker.terminate(); } catch {}
+          return true;
+        };
+        const abort = () => { if (terminate()) resolve('superseded'); };
+        const fail = (error) => {
+          if (!terminate()) return;
+          if (generation === xmlCiiConfigSaveGeneration) clearXmlCiiFetchedRatingsJournal();
+          reject(error);
+        };
+        const timeout = setTimeout(() => fail(new Error('Fetch config worker did not respond within 30000 ms')), 30000);
+        xmlCiiAbortFetchWorker = abort;
         worker.onmessage = ({ data }) => {
-          if (data?.generation !== generation) return;
-          terminate();
-          if (generation !== xmlCiiConfigSaveGeneration) { resolve('superseded'); return; }
-          if (data.error) { reject(new Error(data.error)); return; }
+          if (data?.generation !== generation || settled) return;
+          if (generation !== xmlCiiConfigSaveGeneration) { abort(); return; }
+          if (data.error) { fail(new Error(data.error)); return; }
+          if (!terminate()) return;
           try {
             const perf = typeof performance !== 'undefined' ? performance : null;
             perf?.mark?.('xml-cii:popup:fetch-worker-commit:start');
@@ -6818,16 +6835,18 @@ export function renderModelConvertersTab(container) {
               requestAnimationFrame(() => setTimeout(updateUi, 0));
             else setTimeout(updateUi, 0);
             resolve(data.status);
-          } catch (error) { reject(error); }
+          } catch (error) {
+            if (generation === xmlCiiConfigSaveGeneration) clearXmlCiiFetchedRatingsJournal();
+            reject(error);
+          }
         };
         worker.onerror = (event) => {
-          terminate();
-          reject(new Error(String(event?.message || 'config save worker failed')));
+          fail(new Error(String(event?.message || 'config save worker failed')));
         };
         try {
           worker.postMessage({ generation, config, compact, selectedConverter,
             defaultsByConverter: snapshot });
-        } catch (error) { terminate(); reject(error); }
+        } catch (error) { fail(error); }
       });
       xmlCiiPendingFetchSave = pendingSave;
       pendingSave.then(
@@ -7944,7 +7963,13 @@ export function renderModelConvertersTab(container) {
         onSaveConfig: (newConfig, source = {}) => xmlCiiSaveConfig(newConfig, {
           compact: true, background: source.fetchRating === true,
         }),
-        onStageRatingOverrides: (newConfig) => stageXmlCiiFetchedRatings(newConfig.overrides),
+        onStageRatingOverrides: (newConfig, { previousFetchedKeys = [] } = {}) => {
+          stageXmlCiiFetchedRatings(newConfig.overrides, previousFetchedKeys);
+          // Stage-time invalidation, not save-time invalidation: an older
+          // Worker must never commit or clear a newer Fetch's journal.
+          ++xmlCiiConfigSaveGeneration;
+          xmlCiiAbortFetchWorker?.();
+        },
         openOverridePopup: _xmlCiiOpenPreviewOverridePopup,
         ensureOverrides: xmlCiiEnsureOverrides,
         resolveStagedJsonText: (nextConfig) => xmlCiiCurrentStagedJsonSource(nextConfig),
