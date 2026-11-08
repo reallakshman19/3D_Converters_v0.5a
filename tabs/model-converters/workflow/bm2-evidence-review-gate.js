@@ -6,6 +6,8 @@
 export async function waitForXmlCiiEngineOutput({
   hasOutput,
   reviewSkipButton,
+  reviewVisible = () => false,
+  readFailure = () => '',
   now = () => performance.now(),
   delay = ms => new Promise(ok => setTimeout(ok, ms)),
   maxMs = 420000,
@@ -15,7 +17,14 @@ export async function waitForXmlCiiEngineOutput({
   const started = now();
   let skipped = false;
   while (!hasOutput()) {
+    const failed = readFailure();
+    if (failed) return {
+      failed: true, error: String(failed), skipped,
+      outputSource: null,
+    };
     const skip = reviewSkipButton();
+    if (reviewVisible() && !skip)
+      throw Error('BM2 rigid review visible but Skip Review action missing');
     if (skip && !skipped) {
       skip.click();
       skipped = true;
@@ -26,5 +35,5 @@ export async function waitForXmlCiiEngineOutput({
     }
     await delay(150);
   }
-  return { skipped, outputSource: 'production converter output Download' };
+  return { failed: false, error: '', skipped, outputSource: 'production converter output Download' };
 }
