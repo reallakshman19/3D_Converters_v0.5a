@@ -121,10 +121,10 @@ function correctNodeRows(nodeRows, document) {
 }
 
 export function applyPreviewBoreWallAuthority({
-  xmlText, stagedJsonText, config = {}, result,
+  xmlText, stagedJsonText, config = {}, result, sourceDocument = null,
 }) {
   if (!result || !Array.isArray(result.branchRows)) return result;
-  const document = parseXml(xmlText);
+  const document = sourceDocument || parseXml(xmlText);
   if (!document) return result;
   const branches = branchMap(document);
   const stagedEvidenceIndex = indexStagedBranchWallEvidence(stagedJsonText);
