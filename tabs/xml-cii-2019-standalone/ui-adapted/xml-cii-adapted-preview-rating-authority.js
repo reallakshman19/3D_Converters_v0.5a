@@ -112,18 +112,19 @@ function rerankNodeRows(nodeRows, branchRows, config) {
   });
 }
 
-export function applyPreviewRatingAuthority({ xmlText, config = {}, stagedJsonText = '', result } = {}) {
+export function applyPreviewRatingAuthority({ xmlText, config = {}, stagedJsonText = '', result, sourceDocument = null, stagedIndex: sharedStagedIndex = null } = {}) {
   const branchRows = Array.isArray(result?.branchRows) ? result.branchRows : [];
   if (!branchRows.length || typeof DOMParser === 'undefined') return result || { branchRows: [], nodeRows: [] };
   let document;
   try {
-    document = new DOMParser().parseFromString(_toText(xmlText), 'application/xml');
+    document = sourceDocument ||
+      new DOMParser().parseFromString(_toText(xmlText), 'application/xml');
     if (document.getElementsByTagName('parsererror').length) return result;
   } catch {
     return result;
   }
   const branches = [...document.getElementsByTagName('Branch')];
-  const stagedIndex = buildStagedDtxrIndex(stagedJsonText || '', config);
+  const stagedIndex = sharedStagedIndex || buildStagedDtxrIndex(stagedJsonText || '', config);
   const pipingClassIndex = buildPipingClassIndex(config?.pipingClass?.masterRows || []);
   const ratedRows = branchRows.map((row, index) => {
     const branch = branches[index] || branches.find((item) => _xmlText(item, 'Branchname') === row.branchName);
