@@ -79,23 +79,37 @@ const buildMeasures = measures.filter(entry => blockingBuildPhases.has(entry.nam
   .sort((a, b) => b.durationMs - a.durationMs);
 const backgroundAuthority = measures.filter(entry =>
   entry.name === 'xml-cii:popup:build:authority');
+const coreFile = 'tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-dryrun-core.js';
+const wrapperFile = 'tabs/xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-dryrun.js';
 const dryrunSources = {
-  'xml-cii:dryrun:parse': 'preview-dryrun-core.js:417-440',
-  'xml-cii:dryrun:cleanup': 'preview-dryrun-core.js:441-456',
-  'xml-cii:dryrun:index': 'preview-dryrun-core.js:457-466',
-  'xml-cii:dryrun:lineLookup': 'preview-dryrun-core.js:468-490',
-  'xml-cii:dryrun:branchResolve': 'preview-dryrun-core.js:491-508',
-  'xml-cii:dryrun:dtxrWall': 'preview-dryrun-core.js:530-539',
-  'xml-cii:dryrun:nodeRows': 'preview-dryrun-core.js:605-607',
+  'xml-cii:dryrun:parse': coreFile + ':417-444',
+  'xml-cii:dryrun:cleanup': coreFile + ':445-461',
+  'xml-cii:dryrun:index': coreFile + ':462-470',
+  'xml-cii:dryrun:lineLookup': coreFile + ':472-489',
+  'xml-cii:dryrun:branchResolve': coreFile + ':490-505',
+  'xml-cii:dryrun:dtxrWall': coreFile + ':533-537',
+  'xml-cii:dryrun:nodeRows': coreFile + ':609-611',
+  'xml-cii:dryrun:weightRanking': coreFile + ':627-631',
 };
-// Separate non-overlapping cost buckets from diagnostic subspans.
-const latestDryrun = new Map();
+const layerSources = {
+  'xml-cii:dryrun:layer:source-parse': wrapperFile + ':196-197',
+  'xml-cii:dryrun:layer:staged-index': wrapperFile + ':198-201',
+  'xml-cii:dryrun:layer:strict-core': wrapperFile + ':204-209',
+  'xml-cii:dryrun:layer:bore-wall': wrapperFile + ':210-213',
+  'xml-cii:dryrun:layer:material': wrapperFile + ':214-217',
+  'xml-cii:dryrun:layer:rating': wrapperFile + ':218-223',
+};
+const latestCore = new Map();
+const latestLayer = new Map();
 for (const entry of measures) {
-  if (Object.hasOwn(dryrunSources, entry.name)) latestDryrun.set(entry.name, entry.durationMs);
+  if (Object.hasOwn(dryrunSources, entry.name)) latestCore.set(entry.name, entry.durationMs);
+  if (Object.hasOwn(layerSources, entry.name)) latestLayer.set(entry.name, entry.durationMs);
 }
-const dryrunTop3 = [...latestDryrun].map(([name, durationMs]) => ({
-  name, durationMs, file: dryrunSources[name],
-})).sort((a, b) => b.durationMs - a.durationMs).slice(0, 3);
+const top3 = (latest, sources) => [...latest]
+  .map(([name, durationMs]) => ({ name, durationMs, file: sources[name] }))
+  .sort((a, b) => b.durationMs - a.durationMs).slice(0, 3);
+const dryrunTop3 = top3(latestLayer, layerSources);
+const dryrunCoreTop3 = top3(latestCore, dryrunSources);
 
 const output = {
   run: 'PERF-1.R15 BM2 real-Chrome',
@@ -115,6 +129,7 @@ const output = {
   maxStorageWriteBytes: report.bm2Budget?.maxWriteBytes ?? null,
   buildCostTop3: buildMeasures.slice(0, 3),
   dryrunTop3,
+  dryrunCoreTop3,
   backgroundAuthorityMs: backgroundAuthority.at(-1)?.durationMs ?? null,
 };
 console.log(JSON.stringify(output, null, 2));
