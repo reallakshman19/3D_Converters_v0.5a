@@ -248,6 +248,15 @@ export async function run(context) {
   enriched.diagnostics = Array.isArray(enriched.diagnostics) ? enriched.diagnostics : [];
   enriched.diagnostics.push(...(topologyAudit.diagnostics || []));
   const enrichedName = `${stem}_enriched.xml`;
+  // Browser evidence probe only. Capture the *exact* engine-bound XML before
+  // Python can reject a REDUCERS card. Never substitute Preview XML.
+  if (globalThis.__xmlCiiBm2CaptureEngineInput === true) {
+    globalThis.__xmlCiiBm2EngineInput = {
+      text: enriched.xmlText,
+      name: enrichedName,
+      source: 'xmltocii2019_runner.js: Python worker primary XML input',
+    };
+  }
   const enrichedStageName = `${stem}_enriched_staged.json`;
   const topologyName = `${stem}_topology_audit.json`;
   if (!context.workerRunner) throw new Error('Python worker runtime is not available.');
