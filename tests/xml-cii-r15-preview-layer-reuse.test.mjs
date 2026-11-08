@@ -62,3 +62,47 @@ test('J2: shared unmodified XML is cloned for core cleanup, preventing short-nod
     else globalThis.DOMParser = previous;
   }
 });
+
+
+test('J2: strict-line fallback fragments reuse original parsed DOM without a new XML parse', () => {
+  const previousParser = globalThis.DOMParser;
+  const previousSerializer = globalThis.XMLSerializer;
+  let parserCalls = 0;
+  const branch = { childNodes: [
+    { nodeType: 1, localName: 'Branchname', textContent: 'BR-1' },
+  ] };
+  const document = {
+    getElementsByTagName(name) {
+      return name === 'Branch' ? [branch] : [];
+    },
+  };
+  try {
+    globalThis.DOMParser = class {
+      parseFromString() { parserCalls++; throw Error('unexpected duplicate XML parse'); }
+    };
+    globalThis.XMLSerializer = class {
+      serializeToString() { return '<Branch><Branchname>BR-1</Branchname></Branch>'; }
+    };
+    const out = xmlCiiDryRunPreview('<Root><Branch/></Root>', {}, '{}', {
+      parseDocument: () => document,
+      buildStagedIndex: () => ({ items: [] }),
+      buildStrict: (xml, cfg, stage, runtime) => {
+        const fragments = runtime.branchFragments(xml);
+        assert.equal(fragments.length, 1);
+        assert.equal(fragments[0].branchName, 'BR-1');
+        return { branchRows: [{ branchName: 'BR-1' }], nodeRows: [] };
+      },
+      applyWall: ({ result }) => result,
+      applyMaterial: ({ result }) => result,
+      applyRating: ({ result }) => result,
+    });
+    assert.equal(out.branchRows.length, 1);
+    assert.equal(parserCalls, 0, 'fragment fallback must not parse original XML again');
+    // Mutant: removing sourceDocument from browserBranchFragments -> parser call.
+  } finally {
+    if (previousParser === undefined) delete globalThis.DOMParser;
+    else globalThis.DOMParser = previousParser;
+    if (previousSerializer === undefined) delete globalThis.XMLSerializer;
+    else globalThis.XMLSerializer = previousSerializer;
+  }
+});
