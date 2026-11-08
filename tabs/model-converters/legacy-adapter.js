@@ -75,6 +75,7 @@ import { EditablePreviewTable } from './shared/EditablePreviewTable.js';
 import { xmlCiiRenderPreviewPhase as xmlCiiRenderPreviewPhaseImported, xmlCiiBuildAndRenderPreview as xmlCiiBuildAndRenderPreviewImported, xmlCiiDryRunPreview } from './converters/xmltocii2019_helper/preview-renderer.js';
 import { xmlCiiRenderPreviewPhase as xmlCiiRenderPreviewPhaseV7, xmlCiiBuildAndRenderPreview as xmlCiiBuildAndRenderPreviewV7 } from '../xml-cii-2019-standalone/ui-adapted/xml-cii-adapted-preview-renderer-v7.js';
 import { armFirstXmlCiiPreviewBuild } from './workflow/preview-first-click.js';
+import { commitXmlCiiPreparedSave } from './core/fetch-worker-commit.js';
 import { xmlCiiRenderWeightMatchPhase as xmlCiiRenderWeightMatchPhaseImported, bindXmlCiiWeightMatchPhase as bindXmlCiiWeightMatchPhaseImported } from './converters/xmltocii2019_helper/weight-match-renderer.js';
 import { xmlCiiRenderSupportMapperPhase as xmlCiiRenderSupportMapperPhaseImported, bindXmlCiiSupportMapperPhase as bindXmlCiiSupportMapperPhaseImported } from './converters/xmltocii2019_helper/support-types-panel.js';
 import { extractXmlCiiBranchSample as _extractXmlCiiBranchSample } from './xml-cii-branch-sample-sync.js';
@@ -6807,38 +6808,48 @@ export function renderModelConvertersTab(container) {
           if (generation !== xmlCiiConfigSaveGeneration) { abort(); return; }
           if (data.error) { fail(new Error(data.error)); return; }
           if (!terminate()) return;
-          try {
-            const perf = typeof performance !== 'undefined' ? performance : null;
-            perf?.mark?.('xml-cii:popup:fetch-worker-commit:start');
-            writePreparedStoredState(data.payload);
-            activeValues().supportConfigJson = data.fullJson;
-            clearXmlCiiFetchedRatingsJournal();
+          const perf = typeof performance !== 'undefined' ? performance : null;
+          // Worker message handler does no serialization, localStorage writes,
+          // DOM updates, or multi-MB assignment. Those execute separately.
+          const onCommit = commitXmlCiiPreparedSave({
+            payload: data.payload,
+            fullJson: data.fullJson,
+            status: data.status,
+            isCurrent: () => generation === xmlCiiConfigSaveGeneration,
+            writePayload: payload => {
+              perf?.mark?.('xml-cii:popup:fetch-worker-write:start');
+              writePreparedStoredState(payload);
+              perf?.mark?.('xml-cii:popup:fetch-worker-write:end');
+              perf?.measure?.('xml-cii:popup:fetch-worker-write',
+                'xml-cii:popup:fetch-worker-write:start',
+                'xml-cii:popup:fetch-worker-write:end');
+            },
+            setConfig: json => { activeValues().supportConfigJson = json; },
+            clearJournal: clearXmlCiiFetchedRatingsJournal,
+          });
+          onCommit.then(status => {
+            if (status === 'superseded') { resolve(status); return; }
             if (data.status === 'trimmed' && !xmlCiiMasterStorageWarningShown) {
               xmlCiiMasterStorageWarningShown = true;
               notify({ level: 'info', title: 'XML->CII Masters',
                 message: 'Config exceeds browser storage: imported master tables remain available this session but must be re-imported after reload.' });
             }
-            perf?.mark?.('xml-cii:popup:fetch-worker-commit:end');
-            perf?.measure?.('xml-cii:popup:fetch-worker-commit',
-              'xml-cii:popup:fetch-worker-commit:start', 'xml-cii:popup:fetch-worker-commit:end');
-            // Do not concatenate serialization, storage and textarea DOM work
-            // into one long main-thread Fetch task.
             const updateUi = () => {
               if (generation !== xmlCiiConfigSaveGeneration) return;
               xmlCiiRenderAdvancedWhenConfigFits();
               setTimeout(() => {
-                if (generation !== xmlCiiConfigSaveGeneration) return;
-                _xmlCiiSyncConfigTextarea();
+                if (generation === xmlCiiConfigSaveGeneration) _xmlCiiSyncConfigTextarea();
               }, 0);
             };
             if (typeof requestAnimationFrame === 'function')
               requestAnimationFrame(() => setTimeout(updateUi, 0));
             else setTimeout(updateUi, 0);
-            resolve(data.status);
-          } catch (error) {
-            if (generation === xmlCiiConfigSaveGeneration) clearXmlCiiFetchedRatingsJournal();
+            resolve(status);
+          }, error => {
+            if (generation === xmlCiiConfigSaveGeneration)
+              clearXmlCiiFetchedRatingsJournal();
             reject(error);
-          }
+          });
         };
         worker.onerror = (event) => {
           fail(new Error(String(event?.message || 'config save worker failed')));
