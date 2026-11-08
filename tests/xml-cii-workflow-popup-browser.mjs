@@ -220,6 +220,25 @@ const BM2_CHECK = String.raw`(async () => {
     return originalSetItem.call(this, key, value);
   };
   const phase = {};
+  // Real-browser behavioral probes: replacing the Fetch Worker route, removing
+  // its postMessage, pretty-printing config, duplicating writes, or skipping
+  // the synchronous Fetch journal must fail this gate.
+  const originalWorker = window.Worker;
+  const fetchWorkers = { created: 0, sent: 0, replied: 0 };
+  window.Worker = class XmlCiiEvidenceWorker extends originalWorker {
+    constructor(url, opts) {
+      super(url, opts);
+      this.__bm2Fetch = String(url).includes('/core/config-save-worker.js');
+      if (this.__bm2Fetch) {
+        fetchWorkers.created++;
+        this.addEventListener('message', () => { fetchWorkers.replied++; });
+      }
+    }
+    postMessage(...args) {
+      if (this.__bm2Fetch) fetchWorkers.sent++;
+      return super.postMessage(...args);
+    }
+  };
   try {
     bridge.importPopupConfigText(config);
     const xmlInput = document.querySelector('#model-converters-primary-input');
@@ -274,6 +293,7 @@ const BM2_CHECK = String.raw`(async () => {
     }
     const fetchButton = host.querySelector('[data-mc-dtxr-rating-fetch]');
     if (!fetchButton) throw Error('Fetch Rating as per DTXR button missing');
+    const fetchWriteStart = writes.length;
     const fetchStart = performance.now();
     fetchButton.click();
     await wait(() => !!host.querySelector('[data-mc-dtxr-rating-notice]')
@@ -281,6 +301,28 @@ const BM2_CHECK = String.raw`(async () => {
     phase.fetchRatingMs = performance.now() - fetchStart;
     if (phase.fetchRatingMs > __MAX_FETCH_MS__)
       throw Error('BM2 Fetch Rating exceeded budget: ' + Math.round(phase.fetchRatingMs) + ' ms');
+    if (__REPORT_ALL__) {
+      const writesFromFetch = () => writes.slice(fetchWriteStart);
+      await wait(() => fetchWorkers.created > 0 && fetchWorkers.sent > 0 &&
+        fetchWorkers.replied > 0, 'Fetch configuration Worker message', 30000);
+      await wait(() => !localStorage.getItem('model-converters.xml-cii.fetch-rating-journal.v1'),
+        'Fetch journal cleared on durable commit', 30000);
+      const log = writesFromFetch();
+      const journalWrites = log.filter(entry =>
+        entry.key === 'model-converters.xml-cii.fetch-rating-journal.v1');
+      const configWrites = log.filter(entry =>
+        entry.key === 'model-converters.defaults.v1');
+      if (journalWrites.length < 1)
+        throw Error('J1: Fetch did not stage reload journal');
+      if (configWrites.length !== 1)
+        throw Error('W6: Fetch worker must commit config exactly once; got ' + configWrites.length);
+      const storedConfig = JSON.parse(localStorage.getItem('model-converters.defaults.v1'))
+        .defaultsByConverter.xml_to_cii.supportConfigJson;
+      if (storedConfig !== JSON.stringify(JSON.parse(storedConfig)))
+        throw Error('W5: Fetch worker must write compact, not pretty, config');
+      phase.workerEvidence = { ...fetchWorkers, journalWrites: journalWrites.length,
+        configWrites: configWrites.length, compactSaved: true };
+    }
     if (__CAPTURE_OUTPUT__) {
       // The production converter can fail after emitting the exact enriched
       // XML to the Python worker. Capture that real engine-bound payload even
@@ -349,6 +391,7 @@ const BM2_CHECK = String.raw`(async () => {
       }
     }
   } finally {
+    window.Worker = originalWorker;
     Storage.prototype.setItem = originalSetItem;
   }
   if (violations.length)
