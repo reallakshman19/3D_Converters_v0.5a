@@ -138,7 +138,11 @@ export function installDtxrRatingAction({ host, rootEl, xmlText, config, options
       addCacheEvidence(host, { status: 'UNCACHED', reason: 'Rating overrides changed; Rebuild recomputes other suggestions' });
       // Persist a bounded override journal before the browser can reload while
       // the full configuration is still being serialized in a Worker.
-      options?.onStageRatingOverrides?.(config);
+      host.__xmlCiiFetchRevision = (host.__xmlCiiFetchRevision || 0) + 1;
+      options?.onStageRatingOverrides?.(config, {
+        previousFetchedKeys: [...previouslyFetched],
+        revision: host.__xmlCiiFetchRevision,
+      });
       notice(ratingFetchMessage(result), result.applied === 0);
 
       // Persistence is deliberately OUTSIDE the user-visible click handler.
@@ -149,7 +153,16 @@ export function installDtxrRatingAction({ host, rootEl, xmlText, config, options
         const saveAfterPaint = async () => {
           perf?.mark?.('xml-cii:popup:fetch-save:start');
           try {
-            await options?.onSaveConfig?.(config, { fetchRating: true });
+            // A newer Fetch invalidates the in-flight Worker at stage-time.
+            // Retry until the latest revision is durably committed. Two
+            // clicks before rAF still coalesce into one background save.
+            for (;;) {
+              const revision = host.__xmlCiiFetchRevision;
+              const status = await options?.onSaveConfig?.(config, { fetchRating: true });
+              if (status === 'superseded' || revision !== host.__xmlCiiFetchRevision)
+                continue;
+              break;
+            }
           } catch (error) {
             if (rootEl?.querySelector?.('#mc-preview-table-host') === host && host.isConnected !== false)
               addNotice(host, `DTXR ratings applied but could not be saved: ${text(error?.message || error)}`, true);
