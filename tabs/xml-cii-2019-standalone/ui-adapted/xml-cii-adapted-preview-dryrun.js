@@ -37,10 +37,10 @@ function strictLineListConfig(config = {}) {
   };
 }
 
-function browserBranchFragments(xmlText) {
+function browserBranchFragments(xmlText, sourceDocument = null) {
   if (typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') return [];
   try {
-    const document = new DOMParser().parseFromString(String(xmlText ?? ''), 'application/xml');
+    const document = sourceDocument || new DOMParser().parseFromString(String(xmlText ?? ''), 'application/xml');
     if (document.getElementsByTagName('parsererror').length) return [];
     const serializer = new XMLSerializer();
     return [...document.getElementsByTagName('Branch')].map((branch, index) => ({
@@ -205,7 +205,8 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText, runtime = {
       staged === stagedJsonText
       ? core(input, cfg, staged, { sourceDocument, stagedIndex })
       : core(input, cfg, staged),
-    branchFragments: runtime.branchFragments,
+    branchFragments: runtime.branchFragments ||
+      ((input) => browserBranchFragments(input, sourceDocument)),
   }));
   const wallResult = layer('bore-wall', () =>
     (runtime.applyWall || applyPreviewBoreWallAuthority)({
