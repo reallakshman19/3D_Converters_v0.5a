@@ -6842,6 +6842,7 @@ export function renderModelConvertersTab(container) {
             },
             setConfig: json => { activeValues().supportConfigJson = json; },
             clearJournal: clearXmlCiiFetchedRatingsJournal,
+            onFailure: clearXmlCiiFetchedRatingsJournal,
           });
           onCommit.then(status => {
             if (status === 'superseded') { resolve(status); return; }
