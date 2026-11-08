@@ -414,7 +414,7 @@ export function _processDataText(config, keys, fieldKey) {
   return '';
 }
 
-export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
+export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText, runtime = {}) {
   const perf = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance : null;
   const start = perf?.now() ?? 0;
   const elapsed = (since) => perf ? perf.now() - since : 0;
@@ -431,7 +431,11 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
   if (typeof DOMParser === 'undefined') return { branchRows: [], nodeRows: [] };
   let document;
   try {
-    document = new DOMParser().parseFromString(_toText(xmlText), 'application/xml');
+    // Core cleanup removes short/gasket nodes. Clone the shared original
+    // document so Bore/Wall and Rating still observe unmodified XML exactly
+    // as before when each layer parsed its own copy.
+    document = runtime.sourceDocument?.cloneNode?.(true)
+      || new DOMParser().parseFromString(_toText(xmlText), 'application/xml');
     if (document.getElementsByTagName('parsererror').length) return { branchRows: [], nodeRows: [] };
   } catch {
     return { branchRows: [], nodeRows: [] };
@@ -461,7 +465,7 @@ export function xmlCiiDryRunPreview(xmlText, config, stagedJsonText) {
   const dtxrCache = new WeakMap();
   const pipingClassIndex = buildPipingClassIndex(config.pipingClass?.masterRows || []);
   const weightBoreIndex = createXmlCiiWeightBoreIndex(config);
-  const stagedIndex = buildStagedDtxrIndex(stagedJsonText || '', config);
+  const stagedIndex = runtime.stagedIndex || buildStagedDtxrIndex(stagedJsonText || '', config);
   const materialMap = config.material?.mapRows || [];
   totals.index = elapsed(indexStart);
 
