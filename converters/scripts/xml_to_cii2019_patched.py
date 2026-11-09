@@ -747,10 +747,37 @@ def _build_conversion_model(
     nodename_lines, edge_to_nodename_index = base._build_nodename_lines(edges, support_config)
     bend_edges, edge_to_bend_index = base._build_bend_indices(edges)
     rigid_edges, edge_to_rigid_index = base._build_rigid_indices(edges)
+    rigid_mass_source_nodes_by_branch: dict[str, list[base.XmlNode]] = {}
+    for branch in document.branches:
+        rigid_mass_source_nodes_by_branch.setdefault(branch.branch_name, []).extend(
+            branch.mass_source_nodes or branch.nodes
+        )
+    rigid_mass_assignments = base.resolve_element_rigid_masses(
+        edges, edge_to_rigid_index,
+        mass_source_nodes_by_branch=rigid_mass_source_nodes_by_branch,
+    )
     sif_edges, edge_to_sif_index = base._build_sif_indices(edges)
     reducer_edges, edge_to_reducer_index = base._build_reducer_indices(edges)
     restraints, edge_to_restraint_index = base._build_restraints(document.metadata, edges, degrees, explicit_specs, support_map)
-    return base.ConversionModel(document.metadata, edges, degrees, nodename_lines, edge_to_nodename_index, bend_edges, edge_to_bend_index, rigid_edges, edge_to_rigid_index, sif_edges, edge_to_sif_index, reducer_edges, edge_to_reducer_index, restraints, edge_to_restraint_index)
+    return base.ConversionModel(
+        document.metadata,
+        edges,
+        degrees,
+        nodename_lines,
+        edge_to_nodename_index,
+        bend_edges,
+        edge_to_bend_index,
+        rigid_edges,
+        edge_to_rigid_index,
+        sif_edges,
+        edge_to_sif_index,
+        reducer_edges,
+        edge_to_reducer_index,
+        restraints,
+        edge_to_restraint_index,
+        rigid_mass_assignments=rigid_mass_assignments,
+        rigid_mass_source_nodes_by_branch=rigid_mass_source_nodes_by_branch,
+    )
 
 
 def _parse_args() -> argparse.Namespace:

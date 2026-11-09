@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
 import math
 from pathlib import Path
@@ -39,6 +39,11 @@ import re
 import sys
 from typing import Any, Final
 import xml.etree.ElementTree as ET
+
+try:
+    from .rigid_mass_assignment import ElementRigidMass, resolve_element_rigid_masses
+except ImportError:  # Direct execution: python converters/scripts/xml_to_cii2019.py
+    from rigid_mass_assignment import ElementRigidMass, resolve_element_rigid_masses
 
 
 VERSION_PAYLOAD_LINES: Final[int] = 61
@@ -98,6 +103,7 @@ class XmlNode:
     bend_type: int | None
     position: tuple[float, float, float]
     restraint_specs: tuple[RestraintSpec, ...]
+    component_ref_no: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,6 +116,7 @@ class XmlBranch:
     temperatures: tuple[float, ...]
     pressures: tuple[float, ...]
     nodes: list[XmlNode]
+    mass_source_nodes: tuple[XmlNode, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -169,6 +176,8 @@ class ConversionModel:
     edge_to_reducer_index: dict[int, int]
     restraints: list[AssignedRestraint]
     edge_to_restraint_index: dict[int, int]
+    rigid_mass_assignments: dict[int, ElementRigidMass] = field(default_factory=dict)
+    rigid_mass_source_nodes_by_branch: dict[str, list[XmlNode]] = field(default_factory=dict)
 
 
 def _map_position_to_cii(position: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -596,6 +605,7 @@ def _parse_xml_document(path: Path) -> XmlDocument:
                     bend_type=bend_type_value,
                     position=_parse_position(position_text),
                     restraint_specs=_parse_restraints(node_element, namespace),
+                    component_ref_no=_child_text(node_element, namespace, "ComponentRefNo"),
                 )
             )
 
@@ -610,6 +620,7 @@ def _parse_xml_document(path: Path) -> XmlDocument:
                     temperatures=branch_temperatures,
                     pressures=branch_pressures,
                     nodes=parsed_nodes,
+                    mass_source_nodes=tuple(parsed_nodes),
                 )
             )
 
@@ -969,6 +980,15 @@ def _build_conversion_model(
     nodename_lines, edge_to_nodename_index = _build_nodename_lines(edges, support_config)
     bend_edges, edge_to_bend_index = _build_bend_indices(edges)
     rigid_edges, edge_to_rigid_index = _build_rigid_indices(edges)
+    rigid_mass_source_nodes_by_branch: dict[str, list[XmlNode]] = {}
+    for branch in document.branches:
+        rigid_mass_source_nodes_by_branch.setdefault(branch.branch_name, []).extend(
+            branch.mass_source_nodes or branch.nodes
+        )
+    rigid_mass_assignments = resolve_element_rigid_masses(
+        edges, edge_to_rigid_index,
+        mass_source_nodes_by_branch=rigid_mass_source_nodes_by_branch,
+    )
     sif_edges, edge_to_sif_index = _build_sif_indices(edges)
     reducer_edges, edge_to_reducer_index = _build_reducer_indices(edges)
 
@@ -997,6 +1017,8 @@ def _build_conversion_model(
         edge_to_reducer_index=edge_to_reducer_index,
         restraints=restraints,
         edge_to_restraint_index=edge_to_restraint_index,
+        rigid_mass_assignments=rigid_mass_assignments,
+        rigid_mass_source_nodes_by_branch=rigid_mass_source_nodes_by_branch,
     )
 
 
@@ -1266,30 +1288,27 @@ def _build_bend_payload(model: ConversionModel) -> list[str]:
     return lines
 
 
-def _rigid_weight_for_edge(edge: Edge) -> float:
-    """Return the RIGID auxiliary weight for an edge.
+def _rigid_weight_for_edge(edge: Edge, assignment: ElementRigidMass | None = None) -> float:
+    """The RIGID weight is an explicit element assignment, never a node point load.
 
-    Parameters expected:
-    - `edge`: a converted branch edge with parsed endpoint nodes.
-
-    Outputs passed:
-    - Weight from the edge owner node only; a zero/missing owner weight stays zero.
-
-    Fallback:
-    - `RIGID -> FLAN` remains a RIGID auxiliary edge, but it uses the FLAN/to-node
-      weight so an upstream RIGID weight cannot populate a blank flange edge.
+    An unassigned element has no independently established physical mass; do
+    not take the weight from its FROM or TO node as an implicit fallback.
     """
-    if edge.to_node.rigid == 2:
-        return edge.to_node.weight
-    if edge.from_node.rigid == 2 and edge.to_node.component_type == "FLAN":
-        return edge.to_node.weight
-    return 0.0
+    return assignment.resolved_mass if assignment is not None else 0.0
 
 
 def _build_rigid_payload(model: ConversionModel, weight_scale: float = 1.0) -> list[str]:
+    # Resolve from the final emitted topology, including callers that build
+    # a ConversionModel outside _build_conversion_model (patched/direction paths).
+    assignments = resolve_element_rigid_masses(
+        model.edges, model.edge_to_rigid_index,
+        mass_source_nodes_by_branch=model.rigid_mass_source_nodes_by_branch or None,
+    )
     lines: list[str] = []
-    for edge in model.rigid_edges:
-        weight = _rigid_weight_for_edge(edge) * weight_scale
+    for edge_index, edge in enumerate(model.edges):
+        if edge_index not in model.edge_to_rigid_index:
+            continue
+        weight = _rigid_weight_for_edge(edge, assignments[edge_index]) * weight_scale
         lines.append(_row([_format_auto_float(weight), _format_fixed_float(0.0, 6)]))
     return lines
 
