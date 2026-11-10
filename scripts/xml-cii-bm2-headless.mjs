@@ -69,6 +69,16 @@ const fiveTimings = {
 };
 const expected = '5cf2bfbe4cbe88361afcb3374c5230ee4badf42d9f503ec2cb5b2f0b7414e00c';
 const verified = values.outputBytes === 687252 && values.outputSha256 === expected;
+const runFailed = report.bm2Budget?.status === 'RUN_FAILED'
+  && typeof values.runError === 'string' && /^Failed:/i.test(values.runError);
+const engineInputCaptured = Number.isFinite(values.engineInputBytes)
+  && /^[a-f0-9]{64}$/i.test(values.engineInputSha256 || '');
+const timingsComplete = Object.values(fiveTimings).every(Number.isFinite);
+// Converter failure is a separately reported, complete evidence outcome,
+// not a successful engine output. A failure without the input fingerprint
+// or full five timings is still a broken headless evidence run.
+const evidenceComplete = timingsComplete
+  && (runFailed ? engineInputCaptured : verified);
 const measures = report.bm2Budget?.popupPerformanceMeasures || [];
 const blockingBuildPhases = new Set([
   'xml-cii:popup:build:dryrun',
@@ -112,11 +122,18 @@ const dryrunTop3 = top3(latestLayer, layerSources);
 const dryrunCoreTop3 = top3(latestCore, dryrunSources);
 
 const output = {
-  run: 'PERF-1.R15 BM2 real-Chrome',
+  run: 'PERF-1.R16 BM2 real-Chrome',
   ...fiveTimings,
   outputBytes: values.outputBytes ?? null,
   outputSha256: values.outputSha256 ?? null,
   outputFile: values.outputFile ?? null,
+  engineInputBytes: values.engineInputBytes ?? null,
+  engineInputSha256: values.engineInputSha256 ?? null,
+  engineInputFile: values.engineInputFile ?? null,
+  engineInputSource: values.engineInputSource ?? null,
+  evidenceOutcome: runFailed ? (evidenceComplete ? 'CONVERTER_FAILED_EVIDENCE_COMPLETE'
+    : 'CONVERTER_FAILED_EVIDENCE_INCOMPLETE')
+    : (verified && evidenceComplete ? 'CONVERTER_OUTPUT_VERIFIED' : 'EVIDENCE_INCOMPLETE'),
   converterFailure: values.runError ?? null,
   converterStatus: report.bm2Budget?.status ?? null,
   reducerCandidates: values.reducerCandidates ?? [],
@@ -133,7 +150,10 @@ const output = {
   backgroundAuthorityMs: backgroundAuthority.at(-1)?.durationMs ?? null,
 };
 console.log(JSON.stringify(output, null, 2));
-if (exitCode !== 0 || values.runError
-  || Object.values(fiveTimings).some(value => !Number.isFinite(value))
-  || !verified || output.maxStorageWriteBytes > 1000000) process.exitCode = 1;
+const storageValid = Number.isFinite(output.maxStorageWriteBytes)
+  && output.maxStorageWriteBytes <= 1000000;
+const browserExitValid = exitCode === 0 || runFailed;
+if (!evidenceComplete || !storageValid || !browserExitValid)
+  process.exitCode = 1;
+else process.exitCode = 0;
 if (values.runError) console.error('BM2 production converter failed: ' + values.runError);
