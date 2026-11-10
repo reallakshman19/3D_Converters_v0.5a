@@ -7,9 +7,12 @@
  *
  * Optional: --chromium /path/chrome. --config accepts the Oracle path
  * GLRD-INPUTS\\derived\\bm2-workbench-config.json or any explicit file path.
- * Prints five independently measured action spans and SHA-256 of the
- * production downloaded enriched XML (not a synthetic Preview payload).
- * A missing file, failed action, or mismatched SHA exits non-zero.
+ * Prints five independently measured action spans, production converter
+ * status/error, and separate SHA-256 fingerprints for the enriched Python
+ * worker INPUT and the converter's downloadable OUTPUT (when produced).
+ * A complete report of a known converter Failed status with input SHA exits
+ * zero as EVIDENCE, not as a successful conversion. Missing timings, failed
+ * evidence capture or incorrect converter output still exit non-zero.
  */
 import { spawn } from 'node:child_process';
 import { resolve, dirname, join } from 'node:path';
