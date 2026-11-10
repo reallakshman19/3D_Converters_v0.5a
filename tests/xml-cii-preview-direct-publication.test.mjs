@@ -279,6 +279,71 @@ test('F — Fetch Rating updates live branch rows and notice without a duplicate
   // on Fetch breaks the synchronous publication/one-commit assertions.
 });
 
+test('K2/J4: new Fetch during in-flight save retries even if stale Worker reports full', async () => {
+  resetSnapshot();
+  const originalRaf = globalThis.requestAnimationFrame;
+  const frames = [];
+  globalThis.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+  const { root, host } = makeRoot();
+  const config = makeConfig();
+  const stages = [];
+  const pending = [];
+  try {
+    await buildV7Preview(root, XML, config, options({
+      onStageRatingOverrides: (_config, metadata) => stages.push(metadata),
+      onSaveConfig: () => new Promise(resolve => { pending.push(resolve); }),
+    }));
+    const fetch = host.querySelector('[data-mc-dtxr-rating-fetch]');
+    fetch.click();
+    assert.equal(stages.length, 1);
+    assert.equal(frames.length, 1);
+    frames.shift()(); // Chrome's actual rAF branch
+    await waitFor(() => pending.length === 1);
+    fetch.click(); // stages another revision while first promise is pending
+    assert.equal(stages.length, 2);
+    assert.ok(stages[1].revision > stages[0].revision);
+    assert.equal(frames.length, 0, 'second Fetch must not schedule a duplicate save');
+    pending[0]('full'); // stale Worker races and incorrectly reports success
+    await waitFor(() => pending.length === 2);
+    pending[1]('full');
+    await waitFor(() => !host.__xmlCiiFetchSaveScheduled);
+    assert.equal(pending.length, 2, 'retry must persist latest revision');
+    // Mutant: removing revision comparison accepts old save and loses second Fetch.
+  } finally {
+    for (const finish of pending) finish('full');
+    if (originalRaf === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = originalRaf;
+  }
+});
+
+test('K2/J4: superseded Worker status alone triggers retry without a new click', async () => {
+  resetSnapshot();
+  const originalRaf = globalThis.requestAnimationFrame;
+  const frames = [];
+  globalThis.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+  const { root, host } = makeRoot();
+  const pending = [];
+  try {
+    await buildV7Preview(root, XML, makeConfig(), options({
+      onSaveConfig: () => new Promise(resolve => { pending.push(resolve); }),
+    }));
+    host.querySelector('[data-mc-dtxr-rating-fetch]').click();
+    assert.equal(frames.length, 1);
+    frames.shift()();
+    await waitFor(() => pending.length === 1);
+    pending[0]('superseded');
+    await waitFor(() => pending.length === 2);
+    pending[1]('full');
+    await waitFor(() => !host.__xmlCiiFetchSaveScheduled);
+    assert.equal(pending.length, 2);
+    // Mutant: ignoring 'superseded' results loses this Fetch even with same revision.
+  } finally {
+    for (const finish of pending) finish('full');
+    if (originalRaf === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = originalRaf;
+  }
+});
+
 test('H3/G1e: two Fetch clicks before Chrome rAF cause exactly one deferred save', async () => {
   resetSnapshot();
   const oldRaf = globalThis.requestAnimationFrame;
