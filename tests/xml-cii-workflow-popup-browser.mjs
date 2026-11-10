@@ -220,25 +220,8 @@ const BM2_CHECK = String.raw`(async () => {
     return originalSetItem.call(this, key, value);
   };
   const phase = {};
-  // Real-browser behavioral probes: replacing the Fetch Worker route, removing
-  // its postMessage, pretty-printing config, duplicating writes, or skipping
-  // the synchronous Fetch journal must fail this gate.
-  const originalWorker = window.Worker;
-  const fetchWorkers = { created: 0, sent: 0, replied: 0 };
-  window.Worker = class XmlCiiEvidenceWorker extends originalWorker {
-    constructor(url, opts) {
-      super(url, opts);
-      this.__bm2Fetch = String(url).includes('/core/config-save-worker.js');
-      if (this.__bm2Fetch) {
-        fetchWorkers.created++;
-        this.addEventListener('message', () => { fetchWorkers.replied++; });
-      }
-    }
-    postMessage(...args) {
-      if (this.__bm2Fetch) fetchWorkers.sent++;
-      return super.postMessage(...args);
-    }
-  };
+  // Observe the actual durable Fetch effects. Wrapping window.Worker never
+  // intercepted module-scoped Worker references and caused false 30s timeouts.
   try {
     bridge.importPopupConfigText(config);
     const xmlInput = document.querySelector('#model-converters-primary-input');
@@ -302,26 +285,23 @@ const BM2_CHECK = String.raw`(async () => {
     if (phase.fetchRatingMs > __MAX_FETCH_MS__)
       throw Error('BM2 Fetch Rating exceeded budget: ' + Math.round(phase.fetchRatingMs) + ' ms');
     if (__REPORT_ALL__) {
-      const writesFromFetch = () => writes.slice(fetchWriteStart);
-      await wait(() => fetchWorkers.created > 0 && fetchWorkers.sent > 0 &&
-        fetchWorkers.replied > 0, 'Fetch configuration Worker message', 30000);
-      await wait(() => !localStorage.getItem('model-converters.xml-cii.fetch-rating-journal.v1'),
-        'Fetch journal cleared on durable commit', 30000);
-      const log = writesFromFetch();
-      const journalWrites = log.filter(entry =>
-        entry.key === 'model-converters.xml-cii.fetch-rating-journal.v1');
-      const configWrites = log.filter(entry =>
-        entry.key === 'model-converters.defaults.v1');
-      if (journalWrites.length < 1)
-        throw Error('J1: Fetch did not stage reload journal');
-      if (configWrites.length !== 1)
-        throw Error('W6: Fetch worker must commit config exactly once; got ' + configWrites.length);
-      const storedConfig = JSON.parse(localStorage.getItem('model-converters.defaults.v1'))
-        .defaultsByConverter.xml_to_cii.supportConfigJson;
-      if (storedConfig !== JSON.stringify(JSON.parse(storedConfig)))
-        throw Error('W5: Fetch worker must write compact, not pretty, config');
-      phase.workerEvidence = { ...fetchWorkers, journalWrites: journalWrites.length,
-        configWrites: configWrites.length, compactSaved: true };
+      const { observeBm2FetchCommit } = await import(
+        new URL('/tabs/model-converters/workflow/bm2-fetch-commit-evidence.js', location.href).href);
+      const observeCommit = () => observeBm2FetchCommit({
+        writes, fetchWriteStart,
+        readStorage: key => localStorage.getItem(key),
+        hasWorkerWriteMark: performance.getEntriesByType('measure')
+          .some(entry => entry.name === 'xml-cii:popup:fetch-worker-write'),
+      });
+      await wait(() => observeCommit().ready, 'Fetch durable config commit', 30000);
+      const commit = observeCommit();
+      if (commit.journalWrites !== 1)
+        throw Error('J1: Fetch must stage exactly one reload journal; got ' + commit.journalWrites);
+      if (commit.configWrites !== 1)
+        throw Error('W6: Fetch must commit config exactly once; got ' + commit.configWrites);
+      if (!commit.compactSaved)
+        throw Error('W5: Fetch config must use compact (not pretty) JSON');
+      phase.workerEvidence = commit;
     }
     if (__CAPTURE_OUTPUT__) {
       // The production converter can fail after emitting the exact enriched
@@ -421,7 +401,6 @@ const BM2_CHECK = String.raw`(async () => {
       }
     }
   } finally {
-    window.Worker = originalWorker;
     Storage.prototype.setItem = originalSetItem;
   }
   if (violations.length)
