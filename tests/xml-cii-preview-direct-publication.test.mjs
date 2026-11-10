@@ -344,6 +344,30 @@ test('K2/J4: superseded Worker status alone triggers retry without a new click',
   }
 });
 
+test('R17/W3: actual v7 Fetch action sends fetchRating:true to the save callback', async () => {
+  resetSnapshot();
+  const { root, host } = makeRoot();
+  const config = makeConfig();
+  const saves = [];
+  await buildV7Preview(root, XML, config, options({
+    onSaveConfig: async (_config, source) => {
+      saves.push(source);
+      return 'full';
+    },
+  }));
+  const fetchButton = host.querySelector('[data-mc-dtxr-rating-fetch]');
+  assert.ok(fetchButton, 'Fetch button must be installed by the production renderer');
+  fetchButton.click();
+  await waitFor(() => saves.length === 1);
+  assert.deepEqual(saves, [{ fetchRating: true }],
+    'the real renderer must route this save through the Worker, not the sync path');
+  assert.equal(config.overrides.rating['/REG/B1'], '900');
+  // Exact W3 mutation in preview-renderer-v7.js:
+  //   onSaveConfig?.(config, { fetchRating: true })
+  // -> onSaveConfig?.(config, {})
+  // Must go RED even when legacy-adapter's callback remains correct.
+});
+
 test('H3/G1e: two Fetch clicks before Chrome rAF cause exactly one deferred save', async () => {
   resetSnapshot();
   const oldRaf = globalThis.requestAnimationFrame;
