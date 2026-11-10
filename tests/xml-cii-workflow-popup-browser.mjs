@@ -379,13 +379,21 @@ const BM2_CHECK = String.raw`(async () => {
           phase.reducerCount = candidates.length;
           phase.reducerMissingAlphaCount = candidates.filter(c => !c.alphaAngle).length;
         }
-        if (!blob && typeof engineInput?.text === 'string') {
-          blob = new Blob([engineInput.text], { type: 'text/xml;charset=utf-8' });
-          phase.outputFile = engineInput.name;
-          phase.outputSource = engineInput.source;
+        if (typeof engineInput?.text === 'string') {
+          // This is the ENRICHED INPUT passed to Python. It is not a
+          // successfully converted engine output and must never be compared
+          // with the 687252-byte R12 output fingerprint.
+          const inputBytes = new TextEncoder().encode(engineInput.text);
+          const inputDigest = await crypto.subtle.digest('SHA-256', inputBytes);
+          phase.engineInputBytes = inputBytes.byteLength;
+          phase.engineInputSha256 = [...new Uint8Array(inputDigest)]
+            .map(byte => byte.toString(16).padStart(2, '0')).join('');
+          phase.engineInputFile = engineInput.name;
+          phase.engineInputSource = engineInput.source;
         }
         if (!blob && !review.failed) phase.runError = 'No production enriched XML available to hash';
         if (blob) {
+          // Only hash output downloaded from the production converter UI.
           const bytes = new Uint8Array(await blob.arrayBuffer());
           const digest = await crypto.subtle.digest('SHA-256', bytes);
           phase.outputBytes = bytes.byteLength;
