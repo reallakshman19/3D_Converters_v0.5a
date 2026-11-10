@@ -17,6 +17,12 @@ async function copy(relativePath) {
 
 await writeFile(join(tempRoot, 'package.json'), '{"type":"module"}', 'utf8');
 await copy(sourcePath);
+// R15's composed Preview imports the staged-index builder. Stub only that
+// dependency in the intentionally isolated strict-line authority sandbox.
+const resolverDir = join(tempRoot, 'converters/xml-cii2019-core');
+await mkdir(resolverDir, { recursive: true });
+await writeFile(join(resolverDir, 'dtxr-resolver.js'),
+  'export function buildStagedDtxrIndex() { return { items: [] }; }\\n', 'utf8');
 const moduleDir = join(tempRoot, 'tabs/xml-cii-2019-standalone/ui-adapted');
 await mkdir(moduleDir, { recursive: true });
 await writeFile(join(moduleDir, 'xml-cii-adapted-preview-dryrun-core.js'), `
