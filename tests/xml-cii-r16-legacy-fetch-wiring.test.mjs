@@ -16,6 +16,9 @@ async function popupHarness(saveConfig) {
     'let xmlCiiAbortFetchWorker = () => { actions.aborted++; };\n' +
     'const xmlCiiCurrentPrimaryFile = () => ({ text: async () => "<Root/>" });\n' +
     'const xmlCiiConfigWithLoadedMasterRows = () => ({ overrides: {} });\n' +
+    'const _xmlCiiOpenPreviewOverridePopup = () => {};\\n' +
+    'const xmlCiiEnsureOverrides = () => {};\\n' +
+    'const xmlCiiCurrentStagedJsonSource = () => ({ text: "{}" });\\n' +
     'const xmlCiiBuildAndRenderPreviewV7 = async (target, xml, config, options) => { actions.options = options; };\n' +
     'const xmlCiiSaveConfig = (...args) => saveConfig(...args);\n' +
     'const stageXmlCiiFetchedRatings = (...args) => actions.journal.push(args);\n' +
