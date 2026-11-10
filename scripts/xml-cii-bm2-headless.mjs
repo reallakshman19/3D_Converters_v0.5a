@@ -14,6 +14,7 @@
 import { spawn } from 'node:child_process';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { classifyBm2Evidence } from './xml-cii-bm2-evidence-contract.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = new Map();
@@ -67,18 +68,13 @@ const fiveTimings = {
   rebuildMs: values.rebuildMs,
   fetchRatingMs: values.fetchRatingMs,
 };
-const expected = '5cf2bfbe4cbe88361afcb3374c5230ee4badf42d9f503ec2cb5b2f0b7414e00c';
-const verified = values.outputBytes === 687252 && values.outputSha256 === expected;
-const runFailed = report.bm2Budget?.status === 'RUN_FAILED'
-  && typeof values.runError === 'string' && /^Failed:/i.test(values.runError);
-const engineInputCaptured = Number.isFinite(values.engineInputBytes)
-  && /^[a-f0-9]{64}$/i.test(values.engineInputSha256 || '');
-const timingsComplete = Object.values(fiveTimings).every(Number.isFinite);
-// Converter failure is a separately reported, complete evidence outcome,
-// not a successful engine output. A failure without the input fingerprint
-// or full five timings is still a broken headless evidence run.
-const evidenceComplete = timingsComplete
-  && (runFailed ? engineInputCaptured : verified);
+const classification = classifyBm2Evidence({
+  phase: values,
+  status: report.bm2Budget?.status,
+  browserExitCode: exitCode,
+  maxStorageWriteBytes: report.bm2Budget?.maxWriteBytes,
+});
+const verified = classification.outputVerified;
 const measures = report.bm2Budget?.popupPerformanceMeasures || [];
 const blockingBuildPhases = new Set([
   'xml-cii:popup:build:dryrun',
@@ -131,9 +127,7 @@ const output = {
   engineInputSha256: values.engineInputSha256 ?? null,
   engineInputFile: values.engineInputFile ?? null,
   engineInputSource: values.engineInputSource ?? null,
-  evidenceOutcome: runFailed ? (evidenceComplete ? 'CONVERTER_FAILED_EVIDENCE_COMPLETE'
-    : 'CONVERTER_FAILED_EVIDENCE_INCOMPLETE')
-    : (verified && evidenceComplete ? 'CONVERTER_OUTPUT_VERIFIED' : 'EVIDENCE_INCOMPLETE'),
+  evidenceOutcome: classification.outcome,
   converterFailure: values.runError ?? null,
   converterStatus: report.bm2Budget?.status ?? null,
   reducerCandidates: values.reducerCandidates ?? [],
@@ -150,10 +144,5 @@ const output = {
   backgroundAuthorityMs: backgroundAuthority.at(-1)?.durationMs ?? null,
 };
 console.log(JSON.stringify(output, null, 2));
-const storageValid = Number.isFinite(output.maxStorageWriteBytes)
-  && output.maxStorageWriteBytes <= 1000000;
-const browserExitValid = exitCode === 0 || runFailed;
-if (!evidenceComplete || !storageValid || !browserExitValid)
-  process.exitCode = 1;
-else process.exitCode = 0;
+process.exitCode = classification.complete ? 0 : 1;
 if (values.runError) console.error('BM2 production converter failed: ' + values.runError);
