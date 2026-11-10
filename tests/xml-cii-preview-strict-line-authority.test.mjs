@@ -22,7 +22,7 @@ await copy(sourcePath);
 const resolverDir = join(tempRoot, 'converters/xml-cii2019-core');
 await mkdir(resolverDir, { recursive: true });
 await writeFile(join(resolverDir, 'dtxr-resolver.js'),
-  'export function buildStagedDtxrIndex() { return { items: [] }; }\\n', 'utf8');
+  'export function buildStagedDtxrIndex() { return { items: [] }; }\n', 'utf8');
 const moduleDir = join(tempRoot, 'tabs/xml-cii-2019-standalone/ui-adapted');
 await mkdir(moduleDir, { recursive: true });
 await writeFile(join(moduleDir, 'xml-cii-adapted-preview-dryrun-core.js'), `
