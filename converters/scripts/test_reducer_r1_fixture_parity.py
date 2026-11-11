@@ -25,11 +25,11 @@ ROOT = HERE.parent.parent
 BASE = "566efc33e463846dc71193c4ad5e86140e6e5b78"
 SCRIPT = "converters/scripts/xml_to_cii2019_contracted_direction.py"
 FIXTURE_ROOTS = [
-    ROOT / "Benchmarks" / "XML to CII 2019",
-    ROOT / "Benchmarks" / "INPUT XML to CII 2019",
-    ROOT / "tabs" / "model-converters" / "tests" / "fixtures",
+    ROOT / "Benchmarks",
+    ROOT / "tabs" / "model-converters" / "tests",
+    ROOT / "tests" / "fixtures",
+    ROOT / "converters" / "scripts",
 ]
-EXTRA = [ROOT / "Benchmarks" / "LAUNCHERTOPO.XML"]
 
 
 def _run(script: Path, xml: Path, output: Path) -> subprocess.CompletedProcess[str]:
@@ -44,12 +44,20 @@ def _run(script: Path, xml: Path, output: Path) -> subprocess.CompletedProcess[s
 
 
 def _fixtures() -> list[Path]:
-    results = set(EXTRA)
+    results: set[Path] = set()
     for root in FIXTURE_ROOTS:
-        if root.exists():
-            results.update(path for path in root.rglob("*")
-                           if path.is_file() and path.suffix.lower() == ".xml")
-    return sorted(path for path in results if path.is_file())
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() != ".xml":
+                continue
+            with path.open("rb") as file:
+                prefix = file.read(4096)
+            # Only PSI116 source documents are inputs to this converter;
+            # explicitly exclude InputXML/other unrelated XML schemas.
+            if b"<PipeStressExport" in prefix or b"<CleanXML" in prefix:
+                results.add(path)
+    return sorted(results)
 
 
 @unittest.skipUnless(os.environ.get("XML_CII_R1_PARITY") == "1",
