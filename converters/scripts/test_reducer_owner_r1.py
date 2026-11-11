@@ -370,11 +370,11 @@ class TestReducerOwnerR1(unittest.TestCase):
             self.assertFalse(output.exists())
 
     def test_helper_euclidean_half_mm_tolerance_and_no_flange_approach(self):
-        """S1: one 0.3mm match, a 0.7mm decoy; flange approach is not reducer."""
+        """S1: one 0.3mm match, a 10mm decoy; flange approach is not reducer."""
         xml = _document([_branch("/SYNTH/TOLERANCE", [
             _node(10, "PIPE", 1, "=PIPE", 60.3, 3.91, 0),
             _node(20, "PIPE", 2, "=PIPE", 60.3, 3.91, 100),
-            _node(29, "PIPE", 1, "=DECOY", 60.3, 3.91, 299.3),
+            _node(29, "PIPE", 1, "=DECOY", 60.3, 3.91, 290),
             _node(30, "FLAN", 2, "=FLANGE", 60.3, 3.91, 300.3),
             _node(-1, "REDU", 1, "=TOL-REDU", 60.3, 3.91, 300.0),
             _node(40, "REDU", 2, "=TOL-REDU", 114.3, 6.35, 400, 15.7),
