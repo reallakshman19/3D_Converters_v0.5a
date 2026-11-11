@@ -73,6 +73,8 @@ class TestRealConverterFixtureParity(unittest.TestCase):
         fixtures = _fixtures()
         self.assertGreater(len(fixtures), 0)
         successful = []
+        regressions = []
+        reported = []
         with tempfile.TemporaryDirectory(prefix="reducer-r1-parity-") as directory:
             temp = Path(directory)
             old_script = temp / "baseline_contract.py"
@@ -82,31 +84,35 @@ class TestRealConverterFixtureParity(unittest.TestCase):
                 before = temp / f"{number}_before.cii"
                 after = temp / f"{number}_after.cii"
                 baseline = _run(old_script, fixture, before)
-                if baseline.returncode != 0:
-                    print("R4 baseline not converting:", fixture.relative_to(ROOT),
-                          baseline.stderr[-160:].replace("\n", " "))
-                    continue
-                self.assertTrue(before.is_file())
                 fixed = _run(new_script, fixture, after)
-                self.assertEqual(
-                    fixed.returncode, 0,
-                    f"New R1 converter failed on baseline-working fixture: "
-                    f"{fixture.relative_to(ROOT)}\n{fixed.stderr}",
-                )
-                first = before.read_bytes()
-                second = after.read_bytes()
-                first_sha = hashlib.sha256(first).hexdigest()
-                second_sha = hashlib.sha256(second).hexdigest()
-                print(f"R4 fixture={fixture.relative_to(ROOT)} "
-                      f"before={len(first)}:{first_sha} "
-                      f"after={len(second)}:{second_sha}")
-                self.assertEqual(
-                    first, second,
-                    f"Converter fixture byte drift: {fixture.relative_to(ROOT)}",
-                )
-                successful.append(str(fixture.relative_to(ROOT)))
+                base_ok = baseline.returncode == 0 and before.is_file()
+                head_ok = fixed.returncode == 0 and after.is_file()
+                old_bytes = before.read_bytes() if base_ok else b""
+                new_bytes = after.read_bytes() if head_ok else b""
+                old_sha = hashlib.sha256(old_bytes).hexdigest() if base_ok else "-"
+                new_sha = hashlib.sha256(new_bytes).hexdigest() if head_ok else "-"
+                matches = base_ok and head_ok and old_bytes == new_bytes
+                label = str(fixture.relative_to(ROOT))
+                print(f"R4 fixture={label} base_converts={base_ok} "
+                      f"base_bytes={len(old_bytes) if base_ok else '-'} base_sha={old_sha} "
+                      f"head_converts={head_ok} "
+                      f"head_bytes={len(new_bytes) if head_ok else '-'} "
+                      f"head_sha={new_sha} sha_equal={matches if base_ok else 'N/A'}",
+                      flush=True)
+                reported.append(label)
+                if base_ok:
+                    successful.append(label)
+                    if not matches:
+                        regressions.append(
+                            f"{label}: base={len(old_bytes)}/{old_sha}, "
+                            f"head={len(new_bytes) if head_ok else 'FAILED'}/{new_sha}; "
+                            f"head_error={fixed.stderr[-400:]}"
+                        )
         self.assertGreater(len(successful), 0, "No baseline-working fixture was tested")
-        print("R4 byte-identical fixtures:", len(successful))
+        print(f"R4 counted={len(reported)} base_converts={len(successful)} "
+              f"regressions={len(regressions)}")
+        self.assertFalse(regressions,
+                         "Previously working fixtures drifted:\\n" + "\\n".join(regressions))
 
 
 if __name__ == "__main__":
