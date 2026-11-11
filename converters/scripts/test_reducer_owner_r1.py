@@ -285,6 +285,114 @@ class TestReducerOwnerR1(unittest.TestCase):
                 [88.9, 0.0, 16.0])
 
 
+    def test_negative_helper_resolves_by_position_not_source_order(self):
+        """S1: Endpoint1 -1 follows Endpoint2 in source order, but matches RIGID."""
+        xml = _document([_branch("/SYNTH/HELPER", [
+            _node(10, "PIPE", 1, "=PIPE", 60.3, 3.91, 0),
+            _node(20, "PIPE", 2, "=PIPE", 60.3, 3.91, 100),
+            _node(30, "RIGID", 2, "=RIGID", 60.3, 3.91, 300),
+            _node(40, "REDU", 2, "=HELPER-PAIR", 88.9, 5.49, 400, 23.81),
+            # The nearest source-order positive record is 40 (wrong).
+            # Position 300 uniquely matches real rigid node 30 (right).
+            _node(-1, "REDU", 1, "=HELPER-PAIR", 60.3, 3.91, 300),
+            _node(50, "PIPE", 1, "=PIPE", 88.9, 5.49, 500),
+        ])])
+        with tempfile.TemporaryDirectory(prefix="reducer-helper-position-") as directory:
+            path = Path(directory) / "helper.xml"
+            output = Path(directory) / "helper.cii"
+            path.write_text(xml, encoding="utf-8")
+            model = _model(path)
+            self.assertEqual(len(model.reducer_edges), 1)
+            edge = model.reducer_edges[0]
+            self.assertEqual((edge.from_node.node_number, edge.to_node.node_number), (30, 40))
+            self.assertEqual(contracted._reducer_owner_node(edge).node_number, 40)
+            selected = next(i for i, e in enumerate(model.edges) if e is edge)
+            self.assertEqual(model.edge_to_reducer_index[selected], 1)
+            for i, e in enumerate(model.edges):
+                if (e.from_node.node_number, e.to_node.node_number) == (20, 30):
+                    self.assertEqual(model.edge_to_reducer_index.get(i, 0), 0,
+                                     "upstream approach pipe must have no REDUCERS pointer")
+            self.assertEqual([float(v) for v in base._build_reducer_payload(model)[0].split()[:3]],
+                             [88.9, 5.49, 23.81])
+            result = _run_cli(path, output)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                [float(v) for v in _section(output.read_text(), "REDUCERS")[0].split()[:3]],
+                [88.9, 5.49, 23.81],
+                "D2/T2 must be from real positive Endpoint2, never the -1 helper",
+            )
+
+    def test_negative_helper_two_coincident_positive_nodes_refuses(self):
+        """S1: two same-branch numbered candidates at one position = refusal."""
+        xml = _document([_branch("/SYNTH/AMBIG", [
+            _node(10, "PIPE", 1, "=PIPE", 60.3, 3.91, 0),
+            _node(30, "FLAN", 2, "=FLANGE", 60.3, 3.91, 300),
+            _node(31, "RIGID", 1, "=RIGID", 60.3, 3.91, 300.2),
+            _node(-1, "REDU", 1, "=AMBIG-PORT", 60.3, 3.91, 300.1),
+            _node(40, "REDU", 2, "=AMBIG-PORT", 88.9, 5.49, 400, 14.81),
+        ])])
+        with tempfile.TemporaryDirectory(prefix="reducer-helper-ambiguous-") as directory:
+            path = Path(directory) / "ambiguous.xml"
+            output = Path(directory) / "ambiguous.cii"
+            path.write_text(xml, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, r"REDUCERS refusal:.*=AMBIG-PORT.*2 same-branch"):
+                _model(path)
+            result = _run_cli(path, output)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("=AMBIG-PORT", result.stderr)
+            self.assertIn("2 same-branch", result.stderr)
+            self.assertFalse(output.exists())
+
+    def test_negative_helper_never_uses_coincident_node_from_other_branch(self):
+        """S1: same Position elsewhere is not a valid reducer port."""
+        xml = _document([
+            _branch("/SYNTH/OTHER", [
+                _node(90, "PIPE", 1, "=PIPE", 60.3, 3.91, 300),
+                _node(91, "PIPE", 2, "=PIPE", 60.3, 3.91, 350),
+            ]),
+            _branch("/SYNTH/REDU", [
+                _node(20, "PIPE", 1, "=PIPE", 60.3, 3.91, 0),
+                _node(30, "PIPE", 2, "=PIPE", 60.3, 3.91, 100),
+                _node(-1, "REDU", 1, "=FOREIGN", 60.3, 3.91, 300),
+                _node(40, "REDU", 2, "=FOREIGN", 88.9, 5.49, 400, 14.81),
+            ]),
+        ])
+        with tempfile.TemporaryDirectory(prefix="reducer-helper-foreign-") as directory:
+            path = Path(directory) / "foreign.xml"
+            output = Path(directory) / "foreign.cii"
+            path.write_text(xml, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, r"REDUCERS refusal:.*=FOREIGN.*0 same-branch"):
+                _model(path)
+            result = _run_cli(path, output)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("=FOREIGN", result.stderr)
+            self.assertIn("0 same-branch", result.stderr)
+            self.assertFalse(output.exists())
+
+    def test_helper_euclidean_half_mm_tolerance_and_no_flange_approach(self):
+        """S1: one 0.3mm match, a 0.7mm decoy; flange approach is not reducer."""
+        xml = _document([_branch("/SYNTH/TOLERANCE", [
+            _node(10, "PIPE", 1, "=PIPE", 60.3, 3.91, 0),
+            _node(20, "PIPE", 2, "=PIPE", 60.3, 3.91, 100),
+            _node(29, "PIPE", 1, "=DECOY", 60.3, 3.91, 299.3),
+            _node(30, "FLAN", 2, "=FLANGE", 60.3, 3.91, 300.3),
+            _node(-1, "REDU", 1, "=TOL-REDU", 60.3, 3.91, 300.0),
+            _node(40, "REDU", 2, "=TOL-REDU", 114.3, 6.35, 400, 15.7),
+        ])])
+        with tempfile.TemporaryDirectory(prefix="reducer-helper-tolerance-") as directory:
+            path = Path(directory) / "tolerance.xml"
+            output = Path(directory) / "tolerance.cii"
+            path.write_text(xml, encoding="utf-8")
+            model = _model(path)
+            self.assertEqual(len(model.reducer_edges), 1)
+            edge = model.reducer_edges[0]
+            self.assertEqual((edge.from_node.node_number, edge.to_node.node_number), (30, 40))
+            self.assertEqual(
+                [float(v) for v in base._build_reducer_payload(model)[0].split()[:3]],
+                [114.3, 6.35, 15.7])
+            result = _run_cli(path, output)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     @unittest.skipUnless(os.environ.get("XML_CII_BM2_INPUT"), "private R12 engine XML not supplied")
     def test_private_bm2_nine_reducer_records_and_cli_sha(self):
         """R3: Owner-only enriched engine XML; prints actual nine-row D2/T2/angle table.
