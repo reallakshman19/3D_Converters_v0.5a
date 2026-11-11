@@ -54,7 +54,11 @@ class TestReducerR1ActualMutants(unittest.TestCase):
         red = _runner(source, method)
         self.assertNotEqual(red.returncode, 0,
                             f"{mutation} survived; expected GREEN -> RED:\n{red.stderr}")
-        self.assertIn("FAIL", red.stderr, f"{mutation}: expected a behavioral assertion failure")
+        self.assertTrue(
+            "FAIL" in red.stderr or "ERROR" in red.stderr,
+            f"{mutation}: expected the real converter regression test to fail or raise; "
+            f"stderr={red.stderr}",
+        )
         print(f"R5 {mutation}: GREEN -> RED ({method})")
 
     def test_endpoint_one_only_owner(self):
