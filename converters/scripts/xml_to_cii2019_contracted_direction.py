@@ -72,6 +72,8 @@ class ComponentTopologyContext:
     node_aliases: dict[int, int] = field(default_factory=dict)
     diagnostics: list[dict[str, object]] = field(default_factory=list)
     diagnostic_keys: set[tuple[object, ...]] = field(default_factory=set)
+    reducer_occurrences_by_branch: dict[str, list[ComponentOccurrence]] = field(default_factory=lambda: defaultdict(list))
+    reducer_helper_nodes: dict[tuple[str, int], int] = field(default_factory=dict)
 
     def record_once(self, key: tuple[object, ...], code: str, message: str, **context: object) -> None:
         if key in self.diagnostic_keys:
@@ -208,6 +210,9 @@ def _activate_component_topology(path: Path) -> None:
     context = ComponentTopologyContext(source_path=str(path))
     context.records = _source_records(path)
     context.occurrences = _occurrences(context.records)
+    for occurrence in context.occurrences:
+        if occurrence.semantic_type == "REDU":
+            context.reducer_occurrences_by_branch[occurrence.branch_name].append(occurrence)
     for occurrence in context.occurrences:
         for node_number in occurrence.positive_node_numbers:
             context.occurrences_by_node[node_number].append(occurrence)
@@ -557,65 +562,117 @@ def _sif_owner_node(edge: base.Edge) -> base.XmlNode | None:
     return _component_owner_node(edge, {"TEE", "OLET"})
 
 
-def _reducer_edge_occurrence(edge: base.Edge) -> ComponentOccurrence | None:
-    """Only an edge connecting two ports of ONE reducer is a reducer edge.
+def _reducer_helper_number(occ: ComponentOccurrence, port: SourceNodeRecord) -> int:
+    """Resolve a negative PSI116 port to exactly one same-branch numbered node.
 
-    The upstream approach pipe also touches the Endpoint-1 REDU node, but
-    its other end belongs to a different component. Never qualify it.
+    Unlike branch connectivity aliases, this port cannot be borrowed from a
+    neighboring branch. Positions use the existing 0.5 mm coincidence
+    tolerance, measured as a Euclidean distance (not source record order).
     """
-    first = _occurrence_for_node(edge.from_node.node_number, edge.branch_name)
-    second = _occurrence_for_node(edge.to_node.node_number, edge.branch_name)
-    if (first is not None and second is not None
-            and first.occurrence_id == second.occurrence_id
-            and first.semantic_type == "REDU"):
-        return first
-    return None
+    key = (occ.occurrence_id, port.source_index)
+    cached = _ACTIVE_TOPOLOGY.reducer_helper_nodes.get(key)
+    if cached is not None:
+        return cached
+    candidates: set[int] = set()
+    if port.position is not None:
+        for record in _ACTIVE_TOPOLOGY.records:
+            if (record.branch_index != occ.branch_index
+                    or record.node_number is None or record.node_number <= 0
+                    or record.position is None):
+                continue
+            distance = math.dist(port.position, record.position)
+            if distance <= BRANCH_LINK_TOLERANCE_MM:
+                candidates.add(record.node_number)
+    if len(candidates) != 1:
+        raise ValueError(
+            f"REDUCERS refusal: reducer component '{occ.component_ref_no or occ.occurrence_id}' "
+            f"in branch '{occ.branch_name}' Endpoint {port.endpoint} helper "
+            f"has {len(candidates)} same-branch numbered nodes within "
+            f"{BRANCH_LINK_TOLERANCE_MM} mm (need exactly one)."
+        )
+    number = _canonical_node_number(next(iter(candidates)))
+    _ACTIVE_TOPOLOGY.reducer_helper_nodes[key] = number
+    return number
 
 
 def _reducer_source_port(occ: ComponentOccurrence, node: base.XmlNode) -> SourceNodeRecord | None:
-    """Match the surviving positive edge node back to its PSI116 port."""
+    """Find the PSI116 reducer port represented by a positive model node."""
+    canonical = _canonical_node_number(node.node_number)
     for record in occ.records:
-        if record.node_number == node.node_number:
+        if (record.node_number is not None and record.node_number > 0
+                and _canonical_node_number(record.node_number) == canonical):
             return record
     for record in occ.records:
-        if record.node_number is not None and record.node_number > 0:
-            if _canonical_node_number(record.node_number) == node.node_number:
-                return record
+        if record.node_number == -1 and _reducer_helper_number(occ, record) == canonical:
+            return record
     return None
 
 
-def _reducer_taper_angle(node: base.XmlNode, branch_name: str) -> float | None:
-    """Read AlphaAngle only from this REDU port, never from another reducer."""
-    if node.alpha_angle is not None and math.isfinite(node.alpha_angle) and abs(node.alpha_angle) > 1e-9:
-        return node.alpha_angle
-    occ = _occurrence_for_node(node.node_number, branch_name)
-    if occ is not None and occ.semantic_type == "REDU":
-        port = _reducer_source_port(occ, node)
-        if (port is not None and port.alpha_angle is not None
-                and math.isfinite(port.alpha_angle) and abs(port.alpha_angle) > 1e-9):
-            return port.alpha_angle
+def _reducer_edge_occurrence(edge: base.Edge) -> ComponentOccurrence | None:
+    """Both ends must be ports 1 and 2 of the SAME reducer occurrence."""
+    matching: list[ComponentOccurrence] = []
+    for occ in _ACTIVE_TOPOLOGY.reducer_occurrences_by_branch.get(edge.branch_name, ()):
+        first = _reducer_source_port(occ, edge.from_node)
+        second = _reducer_source_port(occ, edge.to_node)
+        if (first is not None and second is not None
+                and {first.endpoint, second.endpoint} == {1, 2}):
+            matching.append(occ)
+    if len(matching) > 1:
+        refs = ", ".join(occ.component_ref_no for occ in matching)
+        raise ValueError(
+            f"REDUCERS refusal: branch '{edge.branch_name}' nodes "
+            f"{edge.from_node.node_number}/{edge.to_node.node_number} "
+            f"match multiple reducer components: {refs}."
+        )
+    return matching[0] if matching else None
+
+
+def _reducer_taper_angle(
+    node: base.XmlNode, branch_name: str, occ: ComponentOccurrence | None = None
+) -> float | None:
+    """Take AlphaAngle from this physical reducer's matched source port."""
+    if occ is None:
+        occ = _occurrence_for_node(node.node_number, branch_name)
+    if occ is None or occ.semantic_type != "REDU":
+        return None
+    record = _reducer_source_port(occ, node)
+    if record is None:
+        return None
+    values = [record.alpha_angle]
+    # Only a reducer's OWN positive node can supply model-level AlphaAngle.
+    # A coincident RIGID/PIPE endpoint resolving a negative helper cannot.
+    if record.node_number is not None and record.node_number > 0:
+        values.append(node.alpha_angle)
+    for value in values:
+        if value is not None and math.isfinite(value) and abs(value) > 1e-9:
+            return value
     return None
 
 
 def _reducer_owner_node(edge: base.Edge) -> base.XmlNode | None:
-    """Return the angle-bearing REDU port of this same-component edge."""
-    if _reducer_edge_occurrence(edge) is None:
+    """Return the real node carrying this same reducer's nonzero AlphaAngle."""
+    occ = _reducer_edge_occurrence(edge)
+    if occ is None:
         return None
     for node in (edge.to_node, edge.from_node):
-        if _reducer_taper_angle(node, edge.branch_name) is not None:
+        if _reducer_taper_angle(node, edge.branch_name, occ) is not None:
             return node
     return None
 
 
 def _reducer_second_port(edge: base.Edge) -> base.XmlNode:
-    """CII REDUCERS D2/T2 belong to Endpoint 2, not necessarily the angle owner."""
+    """D2/T2 come from the numbered Endpoint-2 node, never the helper."""
     occ = _reducer_edge_occurrence(edge)
     if occ is not None:
         for node in (edge.to_node, edge.from_node):
             record = _reducer_source_port(occ, node)
             if record is not None and record.endpoint == 2:
                 return node
-    return edge.to_node
+    raise ValueError(
+        f"REDUCERS refusal: branch '{edge.branch_name}' nodes "
+        f"{edge.from_node.node_number}/{edge.to_node.node_number} "
+        "have no resolved numbered Endpoint 2."
+    )
 
 
 def _build_bend_indices(edges: list[base.Edge]) -> tuple[list[base.Edge], dict[int, int]]:
@@ -627,54 +684,54 @@ def _build_sif_indices(edges: list[base.Edge]) -> tuple[list[base.Edge], dict[in
 
 
 def _build_reducer_indices(edges: list[base.Edge]) -> tuple[list[base.Edge], dict[int, int]]:
-    """Select one internal Endpoint1–Endpoint2 edge per reducer occurrence.
+    """Choose one true Endpoint-1/2 internal edge per physical reducer.
 
-    Port co-identity is mandatory. Angle/diameter are tie-break evidence,
-    never grounds for selecting the neighboring approach pipe. Keep BEND/SIF
-    generic indexers unchanged, and preserve the original edge order.
+    PSI116's -1 helper port is attached to a numbered neighboring-component
+    node by unique same-branch position, never by ordering or a cross-branch
+    coincidence. The approach edge has only one port of this reducer.
     """
-    candidates: dict[str, list[tuple[tuple[int, int, int], int]]] = {}
-    encountered: dict[str, ComponentOccurrence] = {}
+    candidates: dict[str, list[tuple[tuple[int, int], int]]] = {}
+    encountered = {
+        occ.occurrence_id: occ
+        for occ in _ACTIVE_TOPOLOGY.occurrences if occ.semantic_type == "REDU"
+    }
+    # Validate *every* negative helper up front. A missing/ambiguous helper
+    # must be refused rather than silently dropping that component.
+    for occ in encountered.values():
+        for record in occ.records:
+            if record.node_number == -1:
+                _reducer_helper_number(occ, record)
+
     for edge_index, edge in enumerate(edges):
-        first = _occurrence_for_node(edge.from_node.node_number, edge.branch_name)
-        second = _occurrence_for_node(edge.to_node.node_number, edge.branch_name)
-        for occ in (first, second):
-            if occ is not None and occ.semantic_type == "REDU":
-                encountered[occ.occurrence_id] = occ
         occ = _reducer_edge_occurrence(edge)
         if occ is None:
             continue
-        first_port = _reducer_source_port(occ, edge.from_node)
-        second_port = _reducer_source_port(occ, edge.to_node)
-        is_port_pair = (
-            first_port is not None and second_port is not None
-            and {first_port.endpoint, second_port.endpoint} == {1, 2}
-        )
         has_angle = any(
-            _reducer_taper_angle(node, edge.branch_name) is not None
+            _reducer_taper_angle(node, edge.branch_name, occ) is not None
             for node in (edge.from_node, edge.to_node)
         )
-        has_diameter_change = abs(
+        diameter_change = abs(
             edge.from_node.outside_diameter - edge.to_node.outside_diameter
         ) > 1e-3
-        rank = (int(is_port_pair), int(has_angle), int(has_diameter_change))
+        rank = (int(has_angle), int(diameter_change))
         candidates.setdefault(occ.occurrence_id, []).append((rank, edge_index))
 
     selected: set[int] = set()
     for occ_id, occ in encountered.items():
-        choices = candidates.get(occ_id, [])
+        choices = candidates.get(occ_id, ())
         if not choices:
             raise ValueError(
                 f"REDUCERS refusal: reducer component '{occ.component_ref_no or occ.occurrence_id}' "
-                f"in branch '{occ.branch_name}' has no internal Endpoint 1–2 edge."
+                f"in branch '{occ.branch_name}' has no internal Endpoint 1-2 edge."
             )
-        best_rank, best_index = max(choices, key=lambda item: (item[0], -item[1]))
-        if best_rank[0] == 0:
+        best = max(rank for rank, _ in choices)
+        tied = [index for rank, index in choices if rank == best]
+        if len(tied) != 1:
             raise ValueError(
                 f"REDUCERS refusal: reducer component '{occ.component_ref_no or occ.occurrence_id}' "
-                f"in branch '{occ.branch_name}' has no unambiguous Endpoint 1–2 pair."
+                f"in branch '{occ.branch_name}' has {len(tied)} equally qualified internal edges."
             )
-        selected.add(best_index)
+        selected.add(tied[0])
 
     reducer_edges: list[base.Edge] = []
     edge_to_index: dict[int, int] = {}
@@ -769,7 +826,7 @@ def _build_reducer_payload(model: base.ConversionModel) -> list[str]:
     for edge in model.reducer_edges:
         occ = _reducer_edge_occurrence(edge)
         owner = _reducer_owner_node(edge)
-        alpha = _reducer_taper_angle(owner, edge.branch_name) if owner is not None else None
+        alpha = _reducer_taper_angle(owner, edge.branch_name, occ) if owner is not None else None
         if occ is None or owner is None or alpha is None:
             ref = occ.component_ref_no if occ is not None else "unpaired"
             raise ValueError(
