@@ -557,8 +557,65 @@ def _sif_owner_node(edge: base.Edge) -> base.XmlNode | None:
     return _component_owner_node(edge, {"TEE", "OLET"})
 
 
+def _reducer_edge_occurrence(edge: base.Edge) -> ComponentOccurrence | None:
+    """Only an edge connecting two ports of ONE reducer is a reducer edge.
+
+    The upstream approach pipe also touches the Endpoint-1 REDU node, but
+    its other end belongs to a different component. Never qualify it.
+    """
+    first = _occurrence_for_node(edge.from_node.node_number, edge.branch_name)
+    second = _occurrence_for_node(edge.to_node.node_number, edge.branch_name)
+    if (first is not None and second is not None
+            and first.occurrence_id == second.occurrence_id
+            and first.semantic_type == "REDU"):
+        return first
+    return None
+
+
+def _reducer_source_port(occ: ComponentOccurrence, node: base.XmlNode) -> SourceNodeRecord | None:
+    """Match the surviving positive edge node back to its PSI116 port."""
+    for record in occ.records:
+        if record.node_number == node.node_number:
+            return record
+    for record in occ.records:
+        if record.node_number is not None and record.node_number > 0:
+            if _canonical_node_number(record.node_number) == node.node_number:
+                return record
+    return None
+
+
+def _reducer_taper_angle(node: base.XmlNode, branch_name: str) -> float | None:
+    """Read AlphaAngle only from this REDU port, never from another reducer."""
+    if node.alpha_angle is not None and math.isfinite(node.alpha_angle) and abs(node.alpha_angle) > 1e-9:
+        return node.alpha_angle
+    occ = _occurrence_for_node(node.node_number, branch_name)
+    if occ is not None and occ.semantic_type == "REDU":
+        port = _reducer_source_port(occ, node)
+        if (port is not None and port.alpha_angle is not None
+                and math.isfinite(port.alpha_angle) and abs(port.alpha_angle) > 1e-9):
+            return port.alpha_angle
+    return None
+
+
 def _reducer_owner_node(edge: base.Edge) -> base.XmlNode | None:
-    return _component_owner_node(edge, {"REDU"})
+    """Return the angle-bearing REDU port of this same-component edge."""
+    if _reducer_edge_occurrence(edge) is None:
+        return None
+    for node in (edge.to_node, edge.from_node):
+        if _reducer_taper_angle(node, edge.branch_name) is not None:
+            return node
+    return None
+
+
+def _reducer_second_port(edge: base.Edge) -> base.XmlNode:
+    """CII REDUCERS D2/T2 belong to Endpoint 2, not necessarily the angle owner."""
+    occ = _reducer_edge_occurrence(edge)
+    if occ is not None:
+        for node in (edge.to_node, edge.from_node):
+            record = _reducer_source_port(occ, node)
+            if record is not None and record.endpoint == 2:
+                return node
+    return edge.to_node
 
 
 def _build_bend_indices(edges: list[base.Edge]) -> tuple[list[base.Edge], dict[int, int]]:
@@ -570,7 +627,62 @@ def _build_sif_indices(edges: list[base.Edge]) -> tuple[list[base.Edge], dict[in
 
 
 def _build_reducer_indices(edges: list[base.Edge]) -> tuple[list[base.Edge], dict[int, int]]:
-    return _build_component_indices(edges, {"REDU"})
+    """Select one internal Endpoint1–Endpoint2 edge per reducer occurrence.
+
+    Port co-identity is mandatory. Angle/diameter are tie-break evidence,
+    never grounds for selecting the neighboring approach pipe. Keep BEND/SIF
+    generic indexers unchanged, and preserve the original edge order.
+    """
+    candidates: dict[str, list[tuple[tuple[int, int, int], int]]] = {}
+    encountered: dict[str, ComponentOccurrence] = {}
+    for edge_index, edge in enumerate(edges):
+        first = _occurrence_for_node(edge.from_node.node_number, edge.branch_name)
+        second = _occurrence_for_node(edge.to_node.node_number, edge.branch_name)
+        for occ in (first, second):
+            if occ is not None and occ.semantic_type == "REDU":
+                encountered[occ.occurrence_id] = occ
+        occ = _reducer_edge_occurrence(edge)
+        if occ is None:
+            continue
+        first_port = _reducer_source_port(occ, edge.from_node)
+        second_port = _reducer_source_port(occ, edge.to_node)
+        is_port_pair = (
+            first_port is not None and second_port is not None
+            and {first_port.endpoint, second_port.endpoint} == {1, 2}
+        )
+        has_angle = any(
+            _reducer_taper_angle(node, edge.branch_name) is not None
+            for node in (edge.from_node, edge.to_node)
+        )
+        has_diameter_change = abs(
+            edge.from_node.outside_diameter - edge.to_node.outside_diameter
+        ) > 1e-3
+        rank = (int(is_port_pair), int(has_angle), int(has_diameter_change))
+        candidates.setdefault(occ.occurrence_id, []).append((rank, edge_index))
+
+    selected: set[int] = set()
+    for occ_id, occ in encountered.items():
+        choices = candidates.get(occ_id, [])
+        if not choices:
+            raise ValueError(
+                f"REDUCERS refusal: reducer component '{occ.component_ref_no or occ.occurrence_id}' "
+                f"in branch '{occ.branch_name}' has no internal Endpoint 1–2 edge."
+            )
+        best_rank, best_index = max(choices, key=lambda item: (item[0], -item[1]))
+        if best_rank[0] == 0 and len(choices) > 1:
+            raise ValueError(
+                f"REDUCERS refusal: reducer component '{occ.component_ref_no or occ.occurrence_id}' "
+                f"in branch '{occ.branch_name}' has ambiguous internal ports."
+            )
+        selected.add(best_index)
+
+    reducer_edges: list[base.Edge] = []
+    edge_to_index: dict[int, int] = {}
+    for edge_index, edge in enumerate(edges):
+        if edge_index in selected:
+            reducer_edges.append(edge)
+            edge_to_index[edge_index] = len(reducer_edges)
+    return reducer_edges, edge_to_index
 
 
 def _bend_reference_node(owner: base.XmlNode, edge: base.Edge) -> int:
@@ -655,15 +767,29 @@ def _sif_payload_factory(tee_desc_by_node: dict[int, str], support_config: dict)
 def _build_reducer_payload(model: base.ConversionModel) -> list[str]:
     lines: list[str] = []
     for edge in model.reducer_edges:
+        occ = _reducer_edge_occurrence(edge)
         owner = _reducer_owner_node(edge)
-        if owner is None or owner.alpha_angle is None:
-            raise ValueError("REDUCERS auxiliary edge has no PSI116 reducer component owner/AlphaAngle.")
-        other = edge.from_node if owner is edge.to_node else edge.to_node
-        thickness = owner.wall_thickness if owner.wall_thickness > 0.0 else other.wall_thickness
+        alpha = _reducer_taper_angle(owner, edge.branch_name) if owner is not None else None
+        if occ is None or owner is None or alpha is None:
+            ref = occ.component_ref_no if occ is not None else "unpaired"
+            raise ValueError(
+                f"REDUCERS refusal: component '{ref}' branch '{edge.branch_name}' "
+                f"nodes {edge.from_node.node_number}/{edge.to_node.node_number} "
+                "has no PSI116 internal reducer owner/AlphaAngle."
+            )
+        second = _reducer_second_port(edge)
+        if second.outside_diameter <= 0.0:
+            raise ValueError(
+                f"REDUCERS refusal: component '{occ.component_ref_no}' "
+                f"Endpoint 2 has no positive OutsideDiameter."
+            )
+        # The angle carrier can be Endpoint 1 (reverse orientation), but
+        # REDUCERS D2/T2 must always come from Endpoint 2. Never substitute
+        # Endpoint 1's diameter/thickness for a missing second-port value.
         lines.append(base._row([
-            base._format_auto_float(owner.outside_diameter),
-            base._format_auto_float(thickness if thickness > 0.0 else 0.0),
-            base._format_fixed_float(owner.alpha_angle, 4),
+            base._format_auto_float(second.outside_diameter),
+            base._format_auto_float(second.wall_thickness if second.wall_thickness > 0.0 else 0.0),
+            base._format_fixed_float(alpha, 4),
             base._format_fixed_float(0.0, 6),
             base._format_fixed_float(0.0, 6),
         ]))
