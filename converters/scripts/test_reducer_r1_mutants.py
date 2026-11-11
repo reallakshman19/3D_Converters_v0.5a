@@ -103,6 +103,47 @@ class TestReducerR1ActualMutants(unittest.TestCase):
             "test_missing_angle_named_refusal_no_fabricated_zero",
         )
 
+    def test_helper_position_not_source_order(self):
+        original = SOURCE.read_text(encoding="utf-8")
+        mutant = _replace_function(
+            original, "_reducer_helper_number",
+            '''def _reducer_helper_number(occ: ComponentOccurrence, port: SourceNodeRecord) -> int:
+    candidates = [
+        rec.node_number for rec in _ACTIVE_TOPOLOGY.records
+        if rec.branch_index == occ.branch_index
+        and rec.node_number is not None and rec.node_number > 0
+        and rec.source_index < port.source_index
+    ]
+    if not candidates:
+        raise ValueError("REDUCERS refusal: missing helper owner")
+    return _canonical_node_number(candidates[-1])''',
+        )
+        self._expect_green_red(
+            "helper assigned preceding positive source-order node (wrong)",
+            mutant, "test_negative_helper_resolves_by_position_not_source_order",
+        )
+
+    def test_two_coincident_candidates_must_not_be_accepted(self):
+        original = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("if len(candidates) != 1:", original)
+        mutant = original.replace("if len(candidates) != 1:", "if not candidates:", 1)
+        self._expect_green_red(
+            "ambiguous helper accepts two distinct coincident positive nodes",
+            mutant, "test_negative_helper_two_coincident_positive_nodes_refuses",
+        )
+
+    def test_cross_branch_helper_resolution_must_not_be_accepted(self):
+        original = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("record.branch_index != occ.branch_index", original)
+        mutant = original.replace(
+            "record.branch_index != occ.branch_index",
+            "False", 1,
+        )
+        self._expect_green_red(
+            "helper borrows coincident node from another branch",
+            mutant, "test_negative_helper_never_uses_coincident_node_from_other_branch",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
