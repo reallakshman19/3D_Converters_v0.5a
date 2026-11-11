@@ -8,6 +8,7 @@ must be measured separately using the Owner's saved R12 engine input.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -282,6 +283,79 @@ class TestReducerOwnerR1(unittest.TestCase):
             self.assertEqual(
                 [float(x) for x in _section(output.read_text(), "REDUCERS")[0].split()[:3]],
                 [88.9, 0.0, 16.0])
+
+
+    @unittest.skipUnless(os.environ.get("XML_CII_BM2_INPUT"), "private R12 engine XML not supplied")
+    def test_private_bm2_nine_reducer_records_and_cli_sha(self):
+        """R3: Owner-only enriched engine XML; prints actual nine-row D2/T2/angle table.
+
+        Run with XML_CII_BM2_INPUT=<absolute enriched R12 engine input XML>.
+        This optional test does NOT pretend the repo's raw GLRD benchmark is
+        the same input as the R12 UI's 687252-byte enriched engine XML.
+        """
+        path = Path(os.environ["XML_CII_BM2_INPUT"]).resolve()
+        self.assertTrue(path.is_file(), f"BM2 engine input missing: {path}")
+        self.assertEqual(len(path.read_bytes()), 687252, "R12 engine input byte drift")
+        self.assertEqual(
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            "5cf2bfbe4cbe88361afcb3374c5230ee4badf42d9f503ec2cb5b2f0b7414e00c",
+            "R12 engine input digest drift",
+        )
+        model = _model(path)
+        self.assertEqual(len(model.reducer_edges), 9)
+        self.assertEqual(len(model.edge_to_reducer_index), 9)
+        rows = base._build_reducer_payload(model)
+        self.assertEqual(len(rows), 9)
+        observed = []
+        for ordinal, (edge, row) in enumerate(zip(model.reducer_edges, rows, strict=True), 1):
+            occ = contracted._reducer_edge_occurrence(edge)
+            self.assertIsNotNone(occ)
+            port1, port2 = edge.from_node, contracted._reducer_second_port(edge)
+            owner = contracted._reducer_owner_node(edge)
+            self.assertIsNotNone(owner, f"{occ.component_ref_no} missing AlphaAngle")
+            alpha = contracted._reducer_taper_angle(owner, edge.branch_name)
+            self.assertIsNotNone(alpha)
+            vals = [float(x) for x in row.split()[:3]]
+            self.assertAlmostEqual(vals[0], port2.outside_diameter, places=3)
+            self.assertAlmostEqual(vals[1], max(0.0, port2.wall_thickness), places=3)
+            self.assertAlmostEqual(vals[2], alpha, places=3)
+            observed.append((occ.component_ref_no,
+                             f"{edge.from_node.node_number}->{edge.to_node.node_number}",
+                             alpha, port2.outside_diameter, port2.wall_thickness))
+            edge_index = next(i for i, e in enumerate(model.edges) if e is edge)
+            self.assertEqual(model.edge_to_reducer_index.get(edge_index), ordinal)
+        # Seven known first-port cases from Owner's R15 observation.
+        known = {
+            "=134234934/24704": 540,
+            "=134234934/25788": 1010,
+            "=134234934/25852": 1470,
+            "=134234934/25916": 1930,
+            "=134234934/25980": 2400,
+            "=134234934/26044": 2870,
+            "=134234934/27546": 3470,
+        }
+        for component_ref, first_number in known.items():
+            self.assertTrue(
+                any(ref == component_ref and pair.startswith(f"{first_number}->")
+                    for ref, pair, *_ in observed),
+                f"BM2 reducer {component_ref}, first port {first_number} missing",
+            )
+        with tempfile.TemporaryDirectory(prefix="reducer-owner-private-bm2-") as directory:
+            output = Path(directory) / "bm2_owner_r1.cii"
+            completed = _run_cli(path, output)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            cii_rows = _section(output.read_text(encoding="utf-8"), "REDUCERS")
+            self.assertEqual(len(cii_rows), 9)
+            self.assertEqual(
+                [[float(x) for x in line.split()[:3]] for line in cii_rows],
+                [[float(x) for x in line.split()[:3]] for line in rows],
+            )
+            payload = output.read_bytes()
+            print("BM2 CII bytes:", len(payload))
+            print("BM2 CII sha256:", hashlib.sha256(payload).hexdigest())
+            print("BM2 REDUCERS: component | from->to | angle | D2 | T2")
+            for record in observed:
+                print(" | ".join(map(str, record)))
 
 
 if __name__ == "__main__":
