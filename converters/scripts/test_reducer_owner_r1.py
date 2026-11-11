@@ -404,10 +404,15 @@ class TestReducerOwnerR1(unittest.TestCase):
         path = Path(os.environ["XML_CII_BM2_INPUT"]).resolve()
         self.assertTrue(path.is_file(), f"BM2 engine input missing: {path}")
         input_payload = path.read_bytes()
-        print("BM2 engine INPUT bytes:", len(input_payload))
-        print("BM2 engine INPUT sha256:", hashlib.sha256(input_payload).hexdigest())
-        # The input supplied to Python is NOT the independently verified
-        # 687252-byte enrichment OUTPUT fingerprint. Never conflate the two.
+        input_sha = hashlib.sha256(input_payload).hexdigest()
+        print("BM2 supplied XML bytes:", len(input_payload))
+        print("BM2 supplied XML sha256:", input_sha)
+        self.assertEqual(len(input_payload), 687252, "R12 enriched BM2 XML byte drift")
+        self.assertEqual(
+            input_sha,
+            "5cf2bfbe4cbe88361afcb3374c5230ee4badf42d9f503ec2cb5b2f0b7414e00c",
+            "R12 enriched BM2 XML hash drift",
+        )
         model = _model(path)
         self.assertEqual(len(model.reducer_edges), 9)
         self.assertEqual(len(model.edge_to_reducer_index), 9)
