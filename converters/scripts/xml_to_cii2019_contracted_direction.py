@@ -669,10 +669,10 @@ def _build_reducer_indices(edges: list[base.Edge]) -> tuple[list[base.Edge], dic
                 f"in branch '{occ.branch_name}' has no internal Endpoint 1–2 edge."
             )
         best_rank, best_index = max(choices, key=lambda item: (item[0], -item[1]))
-        if best_rank[0] == 0 and len(choices) > 1:
+        if best_rank[0] == 0:
             raise ValueError(
                 f"REDUCERS refusal: reducer component '{occ.component_ref_no or occ.occurrence_id}' "
-                f"in branch '{occ.branch_name}' has ambiguous internal ports."
+                f"in branch '{occ.branch_name}' has no unambiguous Endpoint 1–2 pair."
             )
         selected.add(best_index)
 
